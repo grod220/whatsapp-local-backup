@@ -11,7 +11,9 @@ export function hashMessage(msg: Omit<MessageWithId, 'id'>): string {
 
 export function extractGroupName(zipFilename: string): string {
   const match = zipFilename.match(/^WhatsApp Chat - (.+)\.zip$/);
-  const rawName = match?.[1] ?? zipFilename.replace(/\.zip$/, '');
+  let rawName = match?.[1] ?? zipFilename.replace(/\.zip$/, '');
+  // Strip macOS duplicate suffixes like " (1)", " (2)", etc.
+  rawName = rawName.replace(/ \(\d+\)$/, '');
   // Sanitize for filesystem safety: remove path separators and special chars
   return rawName.replace(/[\/\\:*?"<>|]/g, '_').trim();
 }

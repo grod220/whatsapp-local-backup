@@ -15,20 +15,49 @@ import {
   cleanUnicode,
 } from './utils.js';
 import { generateHtml, generateIndex, type GroupInfo } from './html-generator.js';
+import {
+  discoverWhatsAppZips,
+  getDownloadsPath,
+  getDesktopPath,
+  generateOutputZipPath,
+} from './discovery.js';
+import { createOutputZip, cleanupDirectory } from './zip-output.js';
 
-const zipPaths = process.argv.slice(2);
+// Determine mode based on arguments
+const providedPaths = process.argv.slice(2);
+const isAutoMode = providedPaths.length === 0;
 
-if (zipPaths.length === 0) {
-  console.error('Usage: npm run parse -- <file.zip> [file2.zip ...]');
-  process.exit(1);
+let zipPaths: string[];
+
+if (isAutoMode) {
+  // Auto mode: discover ZIPs in Downloads
+  const downloadsPath = getDownloadsPath();
+  zipPaths = discoverWhatsAppZips(downloadsPath);
+
+  if (zipPaths.length === 0) {
+    console.error('No WhatsApp backup ZIPs found in Downloads folder.');
+    console.error(`\nExpected pattern: "WhatsApp Chat - <group name>.zip"`);
+    console.error(`Searched in: ${downloadsPath}`);
+    console.error(`\nTo manually specify files: npm run parse -- <file.zip> [file2.zip ...]`);
+    process.exit(1);
+  }
+
+  console.log(`Auto mode: Found ${zipPaths.length} WhatsApp backup(s) in Downloads`);
+} else {
+  // Manual mode: use provided paths
+  zipPaths = providedPaths;
 }
 
 const outputDir = './output';
 fs.mkdirSync(outputDir, { recursive: true });
 
+let processedCount = 0;
+let failedCount = 0;
+
 for (const zipPath of zipPaths) {
   if (!fs.existsSync(zipPath)) {
     console.error(`File not found: ${zipPath}`);
+    failedCount++;
     continue;
   }
 
@@ -87,12 +116,14 @@ for (const zipPath of zipPaths) {
     entries = zip.getEntries();
   } catch (err) {
     console.error(`  Failed to open ZIP file: ${err instanceof Error ? err.message : err}`);
+    failedCount++;
     continue;
   }
 
   const chatEntry = entries.find(e => e.entryName.endsWith('_chat.txt'));
   if (!chatEntry) {
     console.warn(`  No _chat.txt found, skipping`);
+    failedCount++;
     continue;
   }
 
@@ -163,6 +194,7 @@ for (const zipPath of zipPaths) {
     parsedMessages = parseString(chatContent);
   } catch (err) {
     console.error(`  Failed to parse chat content: ${err instanceof Error ? err.message : err}`);
+    failedCount++;
     continue;
   }
 
@@ -225,8 +257,10 @@ for (const zipPath of zipPaths) {
     console.log(`  Generated index.html`);
 
     console.log(`  Result: ${existingCount} existing + ${newCount} new = ${messages.length} total`);
+    processedCount++;
   } catch (err) {
     console.error(`  Failed to save output files: ${err instanceof Error ? err.message : err}`);
+    failedCount++;
   }
 }
 
@@ -267,6 +301,25 @@ try {
   console.log(`\nRegenerated HTML for ${groups.length} group(s)`);
 } catch (err) {
   console.error(`Failed to generate root index: ${err instanceof Error ? err.message : err}`);
+}
+
+// Auto mode: create output ZIP and cleanup
+if (isAutoMode && processedCount > 0) {
+  const desktopPath = getDesktopPath();
+  const outputZipPath = generateOutputZipPath(desktopPath);
+
+  console.log(`\nCreating output ZIP...`);
+  try {
+    createOutputZip(outputDir, outputZipPath);
+    console.log(`Created: ${outputZipPath}`);
+  } catch (err) {
+    console.error(`Failed to create output ZIP: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+// Summary
+if (failedCount > 0) {
+  console.log(`\nCompleted with ${failedCount} failure(s)`);
 }
 
 console.log('Done!');
