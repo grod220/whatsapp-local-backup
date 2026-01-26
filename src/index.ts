@@ -13,7 +13,7 @@ import {
   isSystemMessage,
   cleanUnicode,
 } from './utils.js';
-import { generateHtml } from './html-generator.js';
+import { generateHtml, generateIndex, type GroupInfo } from './html-generator.js';
 
 const zipPaths = process.argv.slice(2);
 
@@ -223,4 +223,40 @@ for (const zipPath of zipPaths) {
   }
 }
 
-console.log('\nDone!');
+// Generate root index with all groups
+const groups: GroupInfo[] = [];
+try {
+  const dirs = fs.readdirSync(outputDir, { withFileTypes: true });
+  for (const dir of dirs) {
+    if (!dir.isDirectory()) continue;
+
+    const dataPath = `${outputDir}/${dir.name}/data.json`;
+    if (!fs.existsSync(dataPath)) continue;
+
+    try {
+      const messages: MessageWithId[] = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
+      const lastMessage = messages[messages.length - 1];
+      groups.push({
+        name: dir.name,
+        messageCount: messages.length,
+        lastMessageDate: lastMessage ? new Date(lastMessage.date) : undefined,
+      });
+    } catch {
+      // Skip groups with invalid data
+    }
+  }
+
+  // Sort by last message date (most recent first)
+  groups.sort((a, b) => {
+    if (!a.lastMessageDate) return 1;
+    if (!b.lastMessageDate) return -1;
+    return b.lastMessageDate.getTime() - a.lastMessageDate.getTime();
+  });
+
+  generateIndex(groups, `${outputDir}/index.html`);
+  console.log(`\nGenerated root index.html with ${groups.length} group(s)`);
+} catch (err) {
+  console.error(`Failed to generate root index: ${err instanceof Error ? err.message : err}`);
+}
+
+console.log('Done!');

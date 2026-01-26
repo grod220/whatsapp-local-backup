@@ -13,6 +13,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@kitajs/html": "^4.2.11",
     "adm-zip": "^0.5.16",
     "whatsapp-chat-parser": "^4.0.2"
   },

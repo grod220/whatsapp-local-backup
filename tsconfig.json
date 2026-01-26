@@ -9,7 +9,11 @@
     // See also https://aka.ms/tsconfig/module
     "module": "nodenext",
     "target": "esnext",
-    "types": ["node"],
+    "types": ["node", "@kitajs/html"],
+
+    // JSX for @kitajs/html
+    "jsx": "react-jsx",
+    "jsxImportSource": "@kitajs/html",
     // For nodejs:
     // "lib": ["esnext"],
     // "types": ["node"],
