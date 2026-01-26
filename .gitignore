@@ -1,0 +1,5 @@
+input/*
+!input/.gitkeep
+output/
+.DS_Store
+node_modules/

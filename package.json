@@ -1,0 +1,25 @@
+{
+  "name": "clemcast",
+  "version": "1.0.0",
+  "description": "WhatsApp chat export parser with deduplication",
+  "scripts": {
+    "parse": "tsc --noEmit && tsx src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "whatsapp-chat-parser": "^4.0.2"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^25.0.10",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
