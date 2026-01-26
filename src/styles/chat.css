@@ -214,3 +214,91 @@ header h1 {
 .bubble .attachment-link:hover {
   opacity: 0.8;
 }
+
+/* Lightbox */
+.bubble .attachment img,
+.bubble .attachment video {
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.bubble .attachment img:hover,
+.bubble .attachment video:hover {
+  opacity: 0.85;
+}
+
+.lightbox {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: background 0.12s ease;
+}
+
+.lightbox.active {
+  background: rgba(0, 0, 0, 0.9);
+  pointer-events: auto;
+}
+
+.lightbox-content {
+  max-width: 70vw;
+  max-height: 90vh;
+  border-radius: 8px;
+  overflow: hidden;
+  opacity: 0;
+  transform: scale(0.95);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.lightbox.active .lightbox-content {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.lightbox-content img {
+  max-width: 70vw;
+  max-height: 90vh;
+  width: auto;
+  height: auto;
+  display: block;
+}
+
+.lightbox-content video {
+  width: 70vw;
+  max-height: 90vh;
+  display: block;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  font-size: 24px;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.1s ease;
+}
+
+.lightbox.active .lightbox-close {
+  opacity: 1;
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+}

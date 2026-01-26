@@ -28,6 +28,13 @@ export function isPathTraversal(entryName: string, outputDir: string): boolean {
   return !resolvedPath.startsWith(normalizedOutput + path.sep) && resolvedPath !== normalizedOutput;
 }
 
+// Detect parsing artifacts: lines that are just "Name:" with no actual content
+export function isEmptyAuthorLine(author: string | null, message: string): boolean {
+  if (author !== null) return false;
+  // Pattern: message is just "Name:" or "Name: " (name followed by colon and optional whitespace)
+  return /^[^:\n]+:\s*$/.test(message);
+}
+
 export function isSystemMessage(author: string | null, message: string): boolean {
   if (author === null) return true;
 

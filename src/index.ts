@@ -11,6 +11,7 @@ import {
   isMacOSArtifact,
   isPathTraversal,
   isSystemMessage,
+  isEmptyAuthorLine,
   cleanUnicode,
 } from './utils.js';
 import { generateHtml, generateIndex, type GroupInfo } from './html-generator.js';
@@ -173,6 +174,12 @@ for (const zipPath of zipPaths) {
     const originalAttachment = attachmentMatch?.[1];
     const hashedAttachment = originalAttachment ? filenameMap.get(originalAttachment) : undefined;
     const messageText = cleanMessage.replace(/<attached: .+?>/g, '').trim();
+
+    // Skip parsing artifacts: lines that are just "Name:" with no content
+    if (isEmptyAuthorLine(cleanAuthor, messageText) && hashedAttachment === undefined) {
+      continue;
+    }
+
     const isSystem = isSystemMessage(cleanAuthor, messageText);
 
     const transformedMsg: Omit<MessageWithId, 'id'> = {
@@ -223,7 +230,7 @@ for (const zipPath of zipPaths) {
   }
 }
 
-// Generate root index with all groups
+// Regenerate HTML for all groups and build index
 const groups: GroupInfo[] = [];
 try {
   const dirs = fs.readdirSync(outputDir, { withFileTypes: true });
@@ -241,6 +248,9 @@ try {
         messageCount: messages.length,
         lastMessageDate: lastMessage ? new Date(lastMessage.date) : undefined,
       });
+
+      // Regenerate HTML for this group
+      generateHtml(dir.name, messages, `${outputDir}/${dir.name}/index.html`);
     } catch {
       // Skip groups with invalid data
     }
@@ -254,7 +264,7 @@ try {
   });
 
   generateIndex(groups, `${outputDir}/index.html`);
-  console.log(`\nGenerated root index.html with ${groups.length} group(s)`);
+  console.log(`\nRegenerated HTML for ${groups.length} group(s)`);
 } catch (err) {
   console.error(`Failed to generate root index: ${err instanceof Error ? err.message : err}`);
 }

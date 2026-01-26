@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { MessageWithId } from './types.js';
+import { isEmptyAuthorLine } from './utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAT_CSS = fs.readFileSync(path.join(__dirname, 'styles/chat.css'), 'utf-8');
@@ -25,6 +26,88 @@ const TOGGLE_SCRIPT = `
   document.addEventListener('DOMContentLoaded', function() {
     const btn = document.getElementById('theme-btn');
     if (btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀️' : '🌙';
+  });
+})();
+`;
+
+const LIGHTBOX_SCRIPT = `
+(function() {
+  document.addEventListener('DOMContentLoaded', function() {
+    // Create lightbox elements using safe DOM methods
+    var lightbox = document.createElement('div');
+    lightbox.className = 'lightbox';
+
+    var closeBtn = document.createElement('button');
+    closeBtn.className = 'lightbox-close';
+    closeBtn.textContent = '×';
+
+    var content = document.createElement('div');
+    content.className = 'lightbox-content';
+
+    lightbox.appendChild(closeBtn);
+    lightbox.appendChild(content);
+    document.body.appendChild(lightbox);
+
+    var isClosing = false;
+
+    function closeLightbox() {
+      if (isClosing) return;
+      isClosing = true;
+      // Pause any playing video
+      var video = content.querySelector('video');
+      if (video) video.pause();
+      lightbox.classList.remove('active');
+      // Wait for fade-out transition before clearing content
+      setTimeout(function() {
+        while (content.firstChild) content.removeChild(content.firstChild);
+        isClosing = false;
+      }, 120);
+    }
+
+    // Close on clicking outside content or close button
+    lightbox.addEventListener('click', function(e) {
+      if (e.target === lightbox || e.target === closeBtn) {
+        closeLightbox();
+      }
+    });
+
+    // Close on escape key
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && lightbox.classList.contains('active')) {
+        closeLightbox();
+      }
+    });
+
+    // Open on image/video click
+    document.querySelectorAll('.attachment img, .attachment video').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Pause any currently playing video in lightbox
+        var currentVideo = content.querySelector('video');
+        if (currentVideo) currentVideo.pause();
+
+        // Pause all videos on the page
+        document.querySelectorAll('.attachment video').forEach(function(v) {
+          v.pause();
+        });
+
+        var clone;
+        if (el.tagName === 'IMG') {
+          clone = document.createElement('img');
+          clone.src = el.src;
+        } else {
+          clone = document.createElement('video');
+          clone.src = el.src;
+          clone.controls = true;
+          clone.autoplay = true;
+        }
+        while (content.firstChild) content.removeChild(content.firstChild);
+        content.appendChild(clone);
+        lightbox.classList.add('active');
+      });
+    });
   });
 })();
 `;
@@ -59,7 +142,7 @@ function Attachment({ filename }: { filename: string }) {
     return <div class="attachment"><img src={filePath} loading="lazy" /></div>;
   }
   if (['mp4', 'mov', 'webm', '3gp'].includes(ext)) {
-    return <div class="attachment"><video src={filePath} controls={true} /></div>;
+    return <div class="attachment"><video src={filePath} /></div>;
   }
   if (['mp3', 'ogg', 'opus', 'm4a', 'wav'].includes(ext)) {
     // @ts-expect-error - @kitajs/html types are inconsistent for audio.controls
@@ -106,6 +189,11 @@ function DateSeparator({ date }: { date: Date }) {
 function ChatViewer({ groupName, messages }: { groupName: string; messages: MessageWithId[] }) {
   let lastDateStr = '';
 
+  // Filter out empty author lines (parsing artifacts)
+  const filteredMessages = messages.filter(
+    msg => !isEmptyAuthorLine(msg.author, msg.message) || msg.attachment
+  );
+
   return (
     <html lang="en">
       <head>
@@ -114,6 +202,7 @@ function ChatViewer({ groupName, messages }: { groupName: string; messages: Mess
         <title>{groupName}</title>
         <style>{CHAT_CSS}</style>
         <script>{TOGGLE_SCRIPT}</script>
+        <script>{LIGHTBOX_SCRIPT}</script>
       </head>
       <body>
         <header>
@@ -122,7 +211,7 @@ function ChatViewer({ groupName, messages }: { groupName: string; messages: Mess
           <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()">🌙</button>
         </header>
         <div class="container">
-          {messages.map(msg => {
+          {filteredMessages.map(msg => {
             const date = new Date(msg.date);
             const dateStr = date.toDateString();
             const showSeparator = dateStr !== lastDateStr;
