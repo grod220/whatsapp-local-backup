@@ -1,3 +1,26 @@
+/* Group List with Light/Dark Toggle */
+
+:root {
+  --bg: #f5f5f0;
+  --card-bg: #fafaf7;
+  --text: #2d2d2d;
+  --text-muted: #707070;
+  --border: #e0e0dc;
+  --radius: 12px;
+  --toggle-bg: #e8e8e4;
+  --toggle-fg: #2d2d2d;
+}
+
+[data-theme="dark"] {
+  --bg: #0f0f0f;
+  --card-bg: #1a1a1a;
+  --text: #e4e4e4;
+  --text-muted: #888;
+  --border: #2a2a2a;
+  --toggle-bg: #333;
+  --toggle-fg: #e4e4e4;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -6,9 +29,11 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #e5ddd5;
+  background: var(--bg);
+  color: var(--text);
   min-height: 100vh;
-  padding: 20px;
+  padding: 24px 16px;
+  transition: background 0.2s, color 0.2s;
 }
 
 .container {
@@ -17,31 +42,61 @@ body {
 }
 
 header {
-  background: #075e54;
-  color: white;
-  padding: 20px;
-  border-radius: 12px 12px 0 0;
+  background: var(--card-bg);
+  color: var(--text);
+  padding: 24px;
+  border-radius: var(--radius) var(--radius) 0 0;
   text-align: center;
+  position: relative;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  transition: background 0.2s, border-color 0.2s;
 }
 
 header h1 {
   font-size: 1.4rem;
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.theme-toggle {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  transform: translateY(-50%);
+  background: var(--toggle-bg);
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--toggle-fg);
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.theme-toggle:hover {
+  opacity: 0.8;
 }
 
 .groups {
-  background: white;
-  border-radius: 0 0 12px 12px;
+  background: var(--card-bg);
+  border-radius: 0 0 var(--radius) var(--radius);
   overflow: hidden;
+  border: 1px solid var(--border);
+  border-top: none;
+  transition: background 0.2s, border-color 0.2s;
 }
 
 .group {
   display: flex;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--border);
   text-decoration: none;
-  color: inherit;
+  color: var(--text);
   transition: background 0.15s;
 }
 
@@ -50,21 +105,23 @@ header h1 {
 }
 
 .group:hover {
-  background: #f5f5f5;
+  background: var(--bg);
 }
 
 .group-icon {
   width: 50px;
   height: 50px;
-  background: #075e54;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: var(--text-muted);
   font-size: 1.2rem;
   margin-right: 16px;
   flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s;
 }
 
 .group-info {
@@ -80,11 +137,11 @@ header h1 {
 
 .group-meta {
   font-size: 0.85rem;
-  color: #666;
+  color: var(--text-muted);
 }
 
 .empty {
   padding: 40px 20px;
   text-align: center;
-  color: #666;
+  color: var(--text-muted);
 }

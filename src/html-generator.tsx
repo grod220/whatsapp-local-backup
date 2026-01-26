@@ -7,13 +7,35 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAT_CSS = fs.readFileSync(path.join(__dirname, 'styles/chat.css'), 'utf-8');
 const INDEX_CSS = fs.readFileSync(path.join(__dirname, 'styles/index.css'), 'utf-8');
 
+const TOGGLE_SCRIPT = `
+(function() {
+  const stored = localStorage.getItem('theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const theme = stored || (prefersDark ? 'dark' : 'light');
+  if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+
+  window.toggleTheme = function() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const newTheme = isDark ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme === 'dark' ? 'dark' : '');
+    localStorage.setItem('theme', newTheme);
+    document.getElementById('theme-btn').textContent = newTheme === 'dark' ? '☀️' : '🌙';
+  };
+
+  document.addEventListener('DOMContentLoaded', function() {
+    const btn = document.getElementById('theme-btn');
+    if (btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀️' : '🌙';
+  });
+})();
+`;
+
 function authorColor(name: string): string {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = name.charCodeAt(i) + ((hash << 5) - hash);
   }
   const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 65%, 35%)`;
+  return `hsl(${hue}, 65%, 45%)`;
 }
 
 function formatTime(date: Date): string {
@@ -31,19 +53,19 @@ function formatDate(date: Date): string {
 
 function Attachment({ filename }: { filename: string }) {
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';
-  const path = `attachments/${filename}`;
+  const filePath = `attachments/${filename}`;
 
   if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
-    return <div class="attachment"><img src={path} loading="lazy" /></div>;
+    return <div class="attachment"><img src={filePath} loading="lazy" /></div>;
   }
   if (['mp4', 'mov', 'webm', '3gp'].includes(ext)) {
-    return <div class="attachment"><video src={path} controls={true} /></div>;
+    return <div class="attachment"><video src={filePath} controls={true} /></div>;
   }
   if (['mp3', 'ogg', 'opus', 'm4a', 'wav'].includes(ext)) {
     // @ts-expect-error - @kitajs/html types are inconsistent for audio.controls
-    return <div class="attachment"><audio src={path} controls={true} /></div>;
+    return <div class="attachment"><audio src={filePath} controls={true} /></div>;
   }
-  return <div class="attachment"><a class="attachment-link" href={path}>📎 {filename}</a></div>;
+  return <div class="attachment"><a class="attachment-link" href={filePath}>📎 {filename}</a></div>;
 }
 
 function Message({ msg }: { msg: MessageWithId }) {
@@ -91,10 +113,13 @@ function ChatViewer({ groupName, messages }: { groupName: string; messages: Mess
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>{groupName}</title>
         <style>{CHAT_CSS}</style>
+        <script>{TOGGLE_SCRIPT}</script>
       </head>
       <body>
         <header>
+          <a class="back-link" href="../index.html">←</a>
           <h1>{groupName}</h1>
+          <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()">🌙</button>
         </header>
         <div class="container">
           {messages.map(msg => {
@@ -130,11 +155,13 @@ function GroupList({ groups }: { groups: GroupInfo[] }) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>WhatsApp Backups</title>
         <style>{INDEX_CSS}</style>
+        <script>{TOGGLE_SCRIPT}</script>
       </head>
       <body>
         <div class="container">
           <header>
             <h1>WhatsApp Backups</h1>
+            <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()">🌙</button>
           </header>
           <div class="groups">
             {groups.length === 0 ? (
