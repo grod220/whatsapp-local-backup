@@ -1,0 +1,127 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #e5ddd5;
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+header {
+  background: #075e54;
+  color: white;
+  padding: 16px 20px;
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+header h1 {
+  font-size: 1.2rem;
+  font-weight: 500;
+}
+
+.date-separator {
+  text-align: center;
+  margin: 20px 0;
+}
+
+.date-separator span {
+  background: #e1f3fb;
+  color: #555;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
+}
+
+.message {
+  margin: 4px 0;
+  display: flex;
+}
+
+.message.system {
+  justify-content: center;
+}
+
+.message.system .bubble {
+  background: #fdf8c8;
+  color: #555;
+  font-size: 0.8rem;
+  text-align: center;
+  max-width: 85%;
+  box-shadow: none;
+}
+
+.bubble {
+  background: white;
+  padding: 8px 12px;
+  border-radius: 8px;
+  max-width: 80%;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
+  word-wrap: break-word;
+}
+
+.bubble .author {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.bubble .text {
+  font-size: 0.95rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.bubble .time {
+  font-size: 0.7rem;
+  color: #888;
+  text-align: right;
+  margin-top: 4px;
+}
+
+.bubble .attachment {
+  margin: 8px 0;
+}
+
+.bubble .attachment img {
+  max-width: 100%;
+  border-radius: 4px;
+  display: block;
+}
+
+.bubble .attachment video {
+  max-width: 100%;
+  border-radius: 4px;
+  display: block;
+}
+
+.bubble .attachment audio {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.bubble .attachment-link {
+  display: inline-block;
+  padding: 4px 8px;
+  background: #f0f0f0;
+  border-radius: 4px;
+  color: #075e54;
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+
+.bubble .attachment-link:hover {
+  background: #e0e0e0;
+}
