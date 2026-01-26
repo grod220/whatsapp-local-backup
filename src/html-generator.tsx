@@ -142,7 +142,14 @@ function Attachment({ filename }: { filename: string }) {
     return <div class="attachment"><img src={filePath} loading="lazy" /></div>;
   }
   if (['mp4', 'mov', 'webm', '3gp'].includes(ext)) {
-    return <div class="attachment"><video src={filePath} /></div>;
+    return (
+      <div class="attachment">
+        <div class="video-thumb">
+          <video src={filePath} />
+          <div class="play-icon">▶</div>
+        </div>
+      </div>
+    );
   }
   if (['mp3', 'ogg', 'opus', 'm4a', 'wav'].includes(ext)) {
     // @ts-expect-error - @kitajs/html types are inconsistent for audio.controls

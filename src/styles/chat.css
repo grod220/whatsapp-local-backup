@@ -192,6 +192,27 @@ header h1 {
   background: #000;
 }
 
+.bubble .attachment .video-thumb {
+  position: relative;
+  cursor: pointer;
+}
+
+.bubble .attachment .play-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  font-size: 64px;
+  color: rgba(255, 255, 255, 0.5);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: color 0.15s;
+}
+
+.bubble .attachment .video-thumb:hover .play-icon {
+  color: rgba(255, 255, 255, 0.7);
+}
+
 .bubble .attachment audio {
   width: 100%;
   margin-top: 8px;
