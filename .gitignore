@@ -3,3 +3,6 @@ input/*
 output/
 .DS_Store
 node_modules/
+.idea/
+.deploy-hash
+.wrangler/

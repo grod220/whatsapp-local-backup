@@ -47,4 +47,6 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
   }
+  ,
+  "include": ["src"]
 }

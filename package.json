@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "WhatsApp chat export parser with deduplication",
   "scripts": {
-    "parse": "tsc --noEmit && tsx src/index.ts"
+    "parse": "tsc --noEmit && tsx src/index.ts && tsx scripts/deploy-if-changed.ts"
   },
   "keywords": [],
   "author": "",
