@@ -1,33 +1,29 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import type { MessageWithId } from './types.js';
+import type { MessageWithId, ChunkManifest } from './types.js';
 import { isEmptyAuthorLine } from './utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAT_CSS = fs.readFileSync(path.join(__dirname, 'styles/chat.css'), 'utf-8');
 const INDEX_CSS = fs.readFileSync(path.join(__dirname, 'styles/index.css'), 'utf-8');
 
+// This script MUST run before CSS to prevent flash of wrong theme
+const THEME_INIT_SCRIPT = `(function(){var t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');if(t==='dark')document.documentElement.setAttribute('data-theme','dark')})();`;
+
 const TOGGLE_SCRIPT = `
-(function() {
-  const stored = localStorage.getItem('theme');
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const theme = stored || (prefersDark ? 'dark' : 'light');
-  if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+window.toggleTheme = function() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  const newTheme = isDark ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', newTheme === 'dark' ? 'dark' : '');
+  localStorage.setItem('theme', newTheme);
+  document.getElementById('theme-btn').textContent = newTheme === 'dark' ? '☀️' : '🌙';
+};
 
-  window.toggleTheme = function() {
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    const newTheme = isDark ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', newTheme === 'dark' ? 'dark' : '');
-    localStorage.setItem('theme', newTheme);
-    document.getElementById('theme-btn').textContent = newTheme === 'dark' ? '☀️' : '🌙';
-  };
-
-  document.addEventListener('DOMContentLoaded', function() {
-    const btn = document.getElementById('theme-btn');
-    if (btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀️' : '🌙';
-  });
-})();
+document.addEventListener('DOMContentLoaded', function() {
+  const btn = document.getElementById('theme-btn');
+  if (btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀️' : '🌙';
+});
 `;
 
 const LIGHTBOX_SCRIPT = `
@@ -78,37 +74,324 @@ const LIGHTBOX_SCRIPT = `
       }
     });
 
-    // Open on image/video click
-    document.querySelectorAll('.attachment img, .attachment video').forEach(function(el) {
-      el.addEventListener('click', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
+    // Event delegation: handle clicks on any attachment img/video (including dynamically added)
+    document.body.addEventListener('click', function(e) {
+      var el = e.target.closest('.attachment img, .attachment video, .attachment .video-thumb');
+      if (!el) return;
 
-        // Pause any currently playing video in lightbox
-        var currentVideo = content.querySelector('video');
-        if (currentVideo) currentVideo.pause();
+      // If clicking the video-thumb wrapper, get the video inside
+      if (el.classList.contains('video-thumb')) {
+        el = el.querySelector('video');
+        if (!el) return;
+      }
 
-        // Pause all videos on the page
-        document.querySelectorAll('.attachment video').forEach(function(v) {
-          v.pause();
-        });
+      e.preventDefault();
+      e.stopPropagation();
 
-        var clone;
-        if (el.tagName === 'IMG') {
-          clone = document.createElement('img');
-          clone.src = el.src;
-        } else {
-          clone = document.createElement('video');
-          clone.src = el.src;
-          clone.controls = true;
-          clone.autoplay = true;
-        }
-        while (content.firstChild) content.removeChild(content.firstChild);
-        content.appendChild(clone);
-        lightbox.classList.add('active');
+      // Pause any currently playing video in lightbox
+      var currentVideo = content.querySelector('video');
+      if (currentVideo) currentVideo.pause();
+
+      // Pause all videos on the page
+      document.querySelectorAll('.attachment video').forEach(function(v) {
+        v.pause();
       });
+
+      var clone;
+      if (el.tagName === 'IMG') {
+        clone = document.createElement('img');
+        clone.src = el.src;
+      } else {
+        clone = document.createElement('video');
+        clone.src = el.src;
+        clone.controls = true;
+        clone.autoplay = true;
+      }
+      while (content.firstChild) content.removeChild(content.firstChild);
+      content.appendChild(clone);
+      lightbox.classList.add('active');
     });
   });
+})();
+`;
+
+// This script handles lazy loading of older message chunks
+const LOADER_SCRIPT = `
+(function() {
+  // Robust scroll-to-bottom using ResizeObserver
+  // Keeps user at bottom as lazy images load and expand the page
+  var wasAtBottom = true;
+  var supportsResizeObserver = typeof ResizeObserver !== 'undefined';
+  var resizeObserver = null;
+
+  function scrollToBottom() {
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  }
+
+  // Re-scroll whenever layout changes (images loading, etc.)
+  if (supportsResizeObserver) {
+    resizeObserver = new ResizeObserver(function() {
+      if (wasAtBottom) {
+        scrollToBottom();
+      }
+    });
+    resizeObserver.observe(document.body);
+  }
+
+  // Track if user scrolls away from bottom (throttled to ~10x/sec)
+  var scrollTicking = false;
+  window.addEventListener('scroll', function() {
+    if (!scrollTicking) {
+      scrollTicking = true;
+      requestAnimationFrame(function() {
+        var distanceToBottom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+        wasAtBottom = distanceToBottom < 50;
+        scrollTicking = false;
+      });
+    }
+  });
+
+  // Initial scroll
+  scrollToBottom();
+  window.addEventListener('load', function() {
+    scrollToBottom();
+    wasAtBottom = true;
+  });
+
+  // Stop observing after page stabilizes (30 seconds, or when not loading and not at bottom)
+  var observerStartTime = Date.now();
+  function checkDisconnect() {
+    var elapsed = Date.now() - observerStartTime;
+    // Disconnect after 30s, or after 10s if user has scrolled away from bottom
+    if (elapsed > 30000 || (elapsed > 10000 && !wasAtBottom)) {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+    } else {
+      setTimeout(checkDisconnect, 2000);
+    }
+  }
+  setTimeout(checkDisconnect, 5000);
+
+  var manifest = window.__CHUNK_MANIFEST__;
+  if (!manifest || !manifest.chunks || manifest.chunks.length <= 1) return;
+
+  var sentinel = document.getElementById('load-sentinel');
+  var loader = document.getElementById('chunk-loader');
+  if (!sentinel || !loader) return;
+
+  // Track which chunks are loaded (newest-first in manifest)
+  // The first chunk (index 0, newest) is already inline
+  var nextChunkIndex = 1;
+  var isLoading = false;
+  var loaderShownAt = 0;
+  var loaderHideTimeout = null;
+  var MIN_LOADER_TIME = 800;
+
+  function showLoader() {
+    if (loaderHideTimeout) {
+      clearTimeout(loaderHideTimeout);
+      loaderHideTimeout = null;
+    }
+    loader.classList.add('visible');
+    loaderShownAt = Date.now();
+  }
+
+  function hideLoader() {
+    var elapsed = Date.now() - loaderShownAt;
+    var remaining = MIN_LOADER_TIME - elapsed;
+    if (remaining > 0) {
+      loaderHideTimeout = setTimeout(function() {
+        loader.classList.remove('visible');
+      }, remaining);
+    } else {
+      loader.classList.remove('visible');
+    }
+  }
+
+  // Author color function (same as server-side)
+  function authorColor(name) {
+    var hash = 0;
+    for (var i = 0; i < name.length; i++) {
+      hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    var hue = Math.abs(hash) % 360;
+    return 'hsl(' + hue + ', 65%, 45%)';
+  }
+
+  function formatTime(date) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function formatDate(date) {
+    return date.toLocaleDateString([], {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  }
+
+  function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function escapeAttr(text) {
+    return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function renderAttachment(filename) {
+    var ext = filename.split('.').pop().toLowerCase();
+    var safePath = escapeAttr('attachments/' + filename);
+
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+      return '<div class="attachment"><img src="' + safePath + '" loading="lazy" /></div>';
+    }
+    if (['mp4', 'mov', 'webm', '3gp'].includes(ext)) {
+      return '<div class="attachment"><div class="video-thumb"><video src="' + safePath + '"></video><div class="play-icon">▶</div></div></div>';
+    }
+    if (['mp3', 'ogg', 'opus', 'm4a', 'wav'].includes(ext)) {
+      return '<div class="attachment"><audio src="' + safePath + '" controls></audio></div>';
+    }
+    return '<div class="attachment"><a class="attachment-link" href="' + safePath + '">📎 ' + escapeHtml(filename) + '</a></div>';
+  }
+
+  function renderMessage(msg) {
+    var date = new Date(msg.date);
+
+    if (msg.system) {
+      var content = msg.attachment ? renderAttachment(msg.attachment) : escapeHtml(msg.message);
+      return '<div class="message system"><div class="bubble">' + content + '</div></div>';
+    }
+
+    var author = msg.author || 'Unknown';
+    var html = '<div class="message"><div class="bubble">';
+    html += '<div class="author" style="color: ' + authorColor(author) + '">' + escapeHtml(author) + '</div>';
+    if (msg.attachment) html += renderAttachment(msg.attachment);
+    if (msg.message) html += '<div class="text">' + escapeHtml(msg.message) + '</div>';
+    html += '<div class="time">' + formatTime(date) + '</div>';
+    html += '</div></div>';
+    return html;
+  }
+
+  function renderDateSeparator(date) {
+    return '<div class="date-separator"><span>' + formatDate(date) + '</span></div>';
+  }
+
+  function sentinelVisible() {
+    var rect = sentinel.getBoundingClientRect();
+    return rect.top < 1000 && rect.bottom > 0;
+  }
+
+  // JSONP callback - receives loaded chunk data
+  window.__loadChunk = function(dateKey, messages) {
+    if (!messages || messages.length === 0) return;
+
+    // Build HTML for the chunk
+    var html = '';
+    var lastDateStr = '';
+
+    // Add date separator for this chunk (it's a different day than what's already loaded)
+    var firstMsgDate = new Date(messages[0].date);
+    html += renderDateSeparator(firstMsgDate);
+    lastDateStr = firstMsgDate.toDateString();
+
+    for (var i = 0; i < messages.length; i++) {
+      var msg = messages[i];
+      var date = new Date(msg.date);
+      var dateStr = date.toDateString();
+
+      if (dateStr !== lastDateStr) {
+        html += renderDateSeparator(date);
+        lastDateStr = dateStr;
+      }
+      html += renderMessage(msg);
+    }
+
+    // Preserve scroll position while prepending
+    var prevScrollHeight = document.body.scrollHeight;
+    var prevScrollTop = window.scrollY;
+
+    // Create a fragment and prepend (after sentinel and loader)
+    var temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    // Insert after the loader element
+    while (temp.lastChild) {
+      loader.insertAdjacentElement('afterend', temp.lastChild);
+    }
+
+    // Restore scroll position
+    var newScrollHeight = document.body.scrollHeight;
+    window.scrollTo(0, prevScrollTop + (newScrollHeight - prevScrollHeight));
+
+    isLoading = false;
+    hideLoader();
+    nextChunkIndex++;
+
+    // Check if we should load more (sentinel might still be visible after scroll adjustment)
+    setTimeout(function() {
+      // Only load if sentinel is actually visible (not scrolled far above viewport)
+      if (sentinelVisible()) {
+        loadNextChunk();
+      }
+    }, 100);
+  };
+
+  function loadNextChunk() {
+    if (isLoading || nextChunkIndex >= manifest.chunks.length) return;
+
+    isLoading = true;
+    showLoader();
+
+    var chunk = manifest.chunks[nextChunkIndex];
+    var script = document.createElement('script');
+    script.src = 'chunks/' + chunk.filename;
+    script.onerror = function() {
+      isLoading = false;
+      hideLoader();
+      nextChunkIndex++;  // Skip failed chunk to prevent infinite retry
+      console.error('Failed to load chunk:', chunk.filename);
+    };
+    document.head.appendChild(script);
+  }
+
+  // Use IntersectionObserver to detect when user scrolls near the top
+  if (typeof IntersectionObserver !== 'undefined') {
+    var observer = new IntersectionObserver(function(entries) {
+      if (entries[0].isIntersecting && !isLoading) {
+        loadNextChunk();
+      }
+    }, {
+      root: null,
+      rootMargin: '1000px 0px 0px 0px',
+      threshold: 0
+    });
+    observer.observe(sentinel);
+  }
+
+  // Scroll fallback in case IntersectionObserver doesn't fire
+  var loadTicking = false;
+  window.addEventListener('scroll', function() {
+    if (!loadTicking) {
+      loadTicking = true;
+      requestAnimationFrame(function() {
+        if (sentinelVisible()) {
+          loadNextChunk();
+        }
+        loadTicking = false;
+      });
+    }
+  });
+
+  // Initial check (handles short pages where sentinel is already visible)
+  setTimeout(function() {
+    if (sentinelVisible()) {
+      loadNextChunk();
+    }
+  }, 200);
 })();
 `;
 
@@ -134,12 +417,12 @@ function formatDate(date: Date): string {
   });
 }
 
-function Attachment({ filename }: { filename: string }) {
+function Attachment({ filename, eager }: { filename: string; eager?: boolean | undefined }) {
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';
   const filePath = `attachments/${filename}`;
 
   if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
-    return <div class="attachment"><img src={filePath} loading="lazy" /></div>;
+    return <div class="attachment"><img src={filePath} loading={eager ? "eager" : "lazy"} /></div>;
   }
   if (['mp4', 'mov', 'webm', '3gp'].includes(ext)) {
     return (
@@ -158,14 +441,14 @@ function Attachment({ filename }: { filename: string }) {
   return <div class="attachment"><a class="attachment-link" href={filePath}>📎 {filename}</a></div>;
 }
 
-function Message({ msg }: { msg: MessageWithId }) {
+function Message({ msg, eager }: { msg: MessageWithId; eager?: boolean | undefined }) {
   const date = new Date(msg.date);
 
   if (msg.system) {
     return (
       <div class="message system">
         <div class="bubble">
-          {msg.attachment ? <Attachment filename={msg.attachment} /> : msg.message}
+          {msg.attachment ? <Attachment filename={msg.attachment} eager={eager} /> : msg.message}
         </div>
       </div>
     );
@@ -177,7 +460,7 @@ function Message({ msg }: { msg: MessageWithId }) {
     <div class="message">
       <div class="bubble">
         <div class="author" style={{ color: authorColor(author) }}>{author}</div>
-        {msg.attachment && <Attachment filename={msg.attachment} />}
+        {msg.attachment && <Attachment filename={msg.attachment} eager={eager} />}
         {msg.message && <div class="text">{msg.message}</div>}
         <div class="time">{formatTime(date)}</div>
       </div>
@@ -193,7 +476,21 @@ function DateSeparator({ date }: { date: Date }) {
   );
 }
 
-function ChatViewer({ groupName, messages }: { groupName: string; messages: MessageWithId[] }) {
+function ChatViewer({
+  groupName,
+  messages,
+  manifest,
+  totalMessages,
+  lastUpdated,
+  showBackLink,
+}: {
+  groupName: string;
+  messages: MessageWithId[];
+  manifest: ChunkManifest;
+  totalMessages: number;
+  lastUpdated: Date;
+  showBackLink: boolean;
+}) {
   let lastDateStr = '';
 
   // Filter out empty author lines (parsing artifacts)
@@ -201,37 +498,74 @@ function ChatViewer({ groupName, messages }: { groupName: string; messages: Mess
     msg => !isEmptyAuthorLine(msg.author, msg.message) || msg.attachment
   );
 
+  // Embed manifest for the loader script
+  // Escape < to prevent </script> injection via malicious filenames
+  const manifestScript = `window.__CHUNK_MANIFEST__ = ${JSON.stringify(manifest).replace(/</g, '\\u003c')};`;
+
+  // Format last updated date
+  const lastUpdatedStr = lastUpdated.toLocaleDateString([], {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
   return (
     <html lang="en">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>{groupName}</title>
+        <script>{THEME_INIT_SCRIPT}</script>
         <style>{CHAT_CSS}</style>
         <script>{TOGGLE_SCRIPT}</script>
         <script>{LIGHTBOX_SCRIPT}</script>
+        <script>{manifestScript}</script>
       </head>
       <body>
-        <header>
-          <a class="back-link" href="../index.html">←</a>
-          <h1>{groupName}</h1>
-          <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()">🌙</button>
-        </header>
-        <div class="container">
-          {filteredMessages.map(msg => {
-            const date = new Date(msg.date);
-            const dateStr = date.toDateString();
-            const showSeparator = dateStr !== lastDateStr;
-            if (showSeparator) lastDateStr = dateStr;
+        {showBackLink && <a class="back-link back-link-fixed" href="../index.html">←</a>}
+        <div class="layout">
+          {/* Center column: messages */}
+          <div class="messages-container">
+            <div class="messages-inner">
+              <div id="load-sentinel"></div>
+              <div id="chunk-loader" class="chunk-loader">Loading messages...</div>
+              {filteredMessages.map((msg, index) => {
+                const date = new Date(msg.date);
+                const dateStr = date.toDateString();
+                const showSeparator = dateStr !== lastDateStr;
+                if (showSeparator) lastDateStr = dateStr;
 
-            return (
-              <>
-                {showSeparator && <DateSeparator date={date} />}
-                <Message msg={msg} />
-              </>
-            );
-          })}
+                // Load last 20 messages eagerly so layout is stable at bottom
+                const isEager = index >= filteredMessages.length - 20;
+
+                return (
+                  <>
+                    {showSeparator && <DateSeparator date={date} />}
+                    <Message msg={msg} eager={isEager} />
+                  </>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Right column: group info sidebar */}
+          <div class="sidebar">
+            <div class="group-info-card">
+              <h1>{groupName}</h1>
+              <div class="group-meta">
+                <div>{totalMessages} messages</div>
+                <div>Updated {lastUpdatedStr}</div>
+              </div>
+              <div class="group-description">
+                Updates on the growth and adventures of baby Clement.
+              </div>
+            </div>
+            <div class="sidebar-actions">
+              <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()">🌙</button>
+            </div>
+          </div>
         </div>
+        <script>{LOADER_SCRIPT}</script>
       </body>
     </html>
   );
@@ -239,17 +573,26 @@ function ChatViewer({ groupName, messages }: { groupName: string; messages: Mess
 
 export interface GroupInfo {
   name: string;
+  slug: string;
   messageCount: number;
   lastMessageDate: Date | undefined;
 }
 
 function GroupList({ groups }: { groups: GroupInfo[] }) {
+  // Auto-redirect if only one group
+  const singleGroup = groups.length === 1 ? groups[0] : undefined;
+  const redirectScript = singleGroup
+    ? `location.replace('${singleGroup.slug}/index.html');`
+    : '';
+
   return (
     <html lang="en">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>WhatsApp Backups</title>
+        {redirectScript && <script>{redirectScript}</script>}
+        <script>{THEME_INIT_SCRIPT}</script>
         <style>{INDEX_CSS}</style>
         <script>{TOGGLE_SCRIPT}</script>
       </head>
@@ -264,7 +607,7 @@ function GroupList({ groups }: { groups: GroupInfo[] }) {
               <div class="empty">No chats backed up yet</div>
             ) : (
               groups.map(group => (
-                <a class="group" href={`${encodeURIComponent(group.name)}/index.html`}>
+                <a class="group" href={`${group.slug}/index.html`}>
                   <div class="group-icon">{group.name.charAt(0)}</div>
                   <div class="group-info">
                     <div class="group-name">{group.name}</div>
@@ -285,8 +628,25 @@ function GroupList({ groups }: { groups: GroupInfo[] }) {
   );
 }
 
-export function generateHtml(groupName: string, messages: MessageWithId[], outputPath: string): void {
-  const html = '<!DOCTYPE html>' + (<ChatViewer groupName={groupName} messages={messages} />);
+export function generateHtml(
+  groupName: string,
+  messages: MessageWithId[],
+  manifest: ChunkManifest,
+  totalMessages: number,
+  lastUpdated: Date,
+  outputPath: string,
+  showBackLink: boolean = true
+): void {
+  const html = '<!DOCTYPE html>' + (
+    <ChatViewer
+      groupName={groupName}
+      messages={messages}
+      manifest={manifest}
+      totalMessages={totalMessages}
+      lastUpdated={lastUpdated}
+      showBackLink={showBackLink}
+    />
+  );
   fs.writeFileSync(outputPath, html);
 }
 

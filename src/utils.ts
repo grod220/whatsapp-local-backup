@@ -48,6 +48,7 @@ export function isSystemMessage(author: string | null, message: string): boolean
     / removed /,
     / joined using /,
     / left$/,
+    /requested to add/,
     /^Missed (video|voice) call/,
     /^You're now an admin$/,
     /is no longer an admin$/,
@@ -65,4 +66,18 @@ export function cleanUnicode(str: string): string {
   return str
     .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')  // LTR/RTL marks, embeddings, isolates
     .replace(/\u2011/g, '-');  // Non-breaking hyphen → regular hyphen
+}
+
+// Convert a name to a URL-friendly slug
+export function slugify(str: string): string {
+  const result = str
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')  // Remove diacritics
+    .replace(/[^\w\s-]/g, '')          // Remove non-word chars (emojis, symbols)
+    .replace(/\s+/g, '-')              // Spaces to hyphens
+    .replace(/-+/g, '-')               // Collapse multiple hyphens
+    .replace(/^-|-$/g, '');            // Trim leading/trailing hyphens
+  // Fallback for emoji-only or non-ASCII names that result in empty string
+  return result || 'group';
 }

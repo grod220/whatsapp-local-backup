@@ -4,7 +4,7 @@ import * as crypto from 'crypto';
 import AdmZip from 'adm-zip';
 import { parseString } from 'whatsapp-chat-parser';
 
-import type { MessageWithId, AttachmentManifest } from './types.js';
+import type { MessageWithId, AttachmentManifest, ChunkManifest, ChunkInfo } from './types.js';
 import {
   hashMessage,
   extractGroupName,
@@ -13,6 +13,7 @@ import {
   isSystemMessage,
   isEmptyAuthorLine,
   cleanUnicode,
+  slugify,
 } from './utils.js';
 import { generateHtml, generateIndex, type GroupInfo } from './html-generator.js';
 import {
@@ -22,6 +23,101 @@ import {
   generateOutputZipPath,
 } from './discovery.js';
 import { createOutputZip, cleanupDirectory } from './zip-output.js';
+
+/**
+ * Groups messages by local day (YYYY-MM-DD) for chunked loading.
+ * Uses local timezone to match how dates are displayed in the UI.
+ * Returns a Map ordered from oldest to newest day.
+ */
+function groupMessagesByDay(messages: MessageWithId[]): Map<string, MessageWithId[]> {
+  const byDay = new Map<string, MessageWithId[]>();
+
+  for (const msg of messages) {
+    const date = new Date(msg.date);
+    // Skip invalid dates
+    if (isNaN(date.getTime())) continue;
+    // Use local date to match UI display (toDateString uses local timezone)
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dayKey = `${year}-${month}-${day}`; // Local date "2024-01-15"
+
+    if (!byDay.has(dayKey)) {
+      byDay.set(dayKey, []);
+    }
+    byDay.get(dayKey)!.push(msg);
+  }
+
+  return byDay;
+}
+
+/**
+ * Generates JSONP-style chunk files for lazy loading.
+ * Returns the chunk manifest and the messages for the most recent day (for inline rendering).
+ */
+function generateChunks(
+  messages: MessageWithId[],
+  chunksDir: string
+): { manifest: ChunkManifest; latestDayMessages: MessageWithId[] } {
+  fs.mkdirSync(chunksDir, { recursive: true });
+
+  // Filter out empty author lines (parsing artifacts) before chunking
+  // This matches the filtering done in ChatViewer for inline messages
+  const filteredMessages = messages.filter(
+    msg => !isEmptyAuthorLine(msg.author, msg.message) || msg.attachment
+  );
+
+  const byDay = groupMessagesByDay(filteredMessages);
+  const days = Array.from(byDay.keys()).sort(); // Oldest first
+
+  const chunks: ChunkInfo[] = [];
+  let latestDayMessages: MessageWithId[] = [];
+
+  for (const day of days) {
+    const dayMessages = byDay.get(day)!;
+    if (dayMessages.length === 0) continue;
+
+    const filename = `${day}.js`;
+
+    // JSONP format: window.__loadChunk("2024-01-15", [...])
+    const jsonpContent = `window.__loadChunk(${JSON.stringify(day)}, ${JSON.stringify(dayMessages)});`;
+    fs.writeFileSync(path.join(chunksDir, filename), jsonpContent);
+
+    const firstMsg = dayMessages[0]!;
+    const lastMsg = dayMessages[dayMessages.length - 1]!;
+
+    chunks.push({
+      filename,
+      date: day,
+      messageCount: dayMessages.length,
+      firstMessageId: firstMsg.id,
+      lastMessageId: lastMsg.id,
+    });
+
+    // Track latest day for inline rendering
+    latestDayMessages = dayMessages;
+  }
+
+  // Reverse to newest-first for the manifest (easier for client to load older chunks)
+  chunks.reverse();
+
+  const manifest: ChunkManifest = {
+    totalMessages: messages.length,
+    chunks,
+  };
+
+  // Write manifest
+  fs.writeFileSync(path.join(chunksDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+
+  return { manifest, latestDayMessages };
+}
+
+function messageKey(msg: Omit<MessageWithId, 'id'>): string {
+  const dateToMinute = new Date(msg.date).toISOString().slice(0, 16);
+  const author = msg.author ?? '';
+  const attachment = msg.attachment ?? '';
+  return `${dateToMinute}|${author}|${msg.message}|${attachment}`;
+}
 
 // Determine mode based on arguments
 const providedPaths = process.argv.slice(2);
@@ -62,7 +158,8 @@ for (const zipPath of zipPaths) {
   }
 
   const groupName = extractGroupName(path.basename(zipPath));
-  const groupDir = `${outputDir}/${groupName}`;
+  const groupSlug = slugify(groupName);
+  const groupDir = `${outputDir}/${groupSlug}`;
   const groupAttachmentsDir = `${groupDir}/attachments`;
   const manifestPath = `${groupDir}/manifest.json`;
 
@@ -74,6 +171,7 @@ for (const zipPath of zipPaths) {
   // Per-group state
   const messages: MessageWithId[] = [];
   const existingIds = new Set<string>();
+  const existingByKey = new Map<string, MessageWithId>();
   const filenameMap = new Map<string, string>();
   const contentHashMap = new Map<string, string>();
 
@@ -84,10 +182,32 @@ for (const zipPath of zipPaths) {
     if (fs.existsSync(existingDataPath)) {
       const existing: MessageWithId[] = JSON.parse(fs.readFileSync(existingDataPath, 'utf-8'));
       for (const msg of existing) {
+        const key = messageKey(msg);
+        const prior = existingByKey.get(key);
+        if (prior) {
+          if (!prior.system && msg.system) {
+            prior.system = true;
+            const updatedId = hashMessage({
+              date: prior.date,
+              author: prior.author,
+              message: prior.message,
+              ...(prior.attachment !== undefined && { attachment: prior.attachment }),
+              ...(prior.system && { system: true }),
+            });
+            if (updatedId !== prior.id) {
+              existingIds.delete(prior.id);
+              prior.id = updatedId;
+              existingIds.add(updatedId);
+            }
+          }
+          continue;
+        }
+
+        existingByKey.set(key, msg);
         existingIds.add(msg.id);
         messages.push(msg);
       }
-      existingCount = existing.length;
+      existingCount = messages.length;
       console.log(`  Loaded ${existingCount} existing messages`);
     }
   } catch (err) {
@@ -222,13 +342,36 @@ for (const zipPath of zipPaths) {
       ...(isSystem && { system: true }),
     };
 
+    const key = messageKey(transformedMsg);
+    const existingMsg = existingByKey.get(key);
+    if (existingMsg) {
+      if (isSystem && !existingMsg.system) {
+        existingMsg.system = true;
+        const updatedId = hashMessage({
+          date: existingMsg.date,
+          author: existingMsg.author,
+          message: existingMsg.message,
+          ...(existingMsg.attachment !== undefined && { attachment: existingMsg.attachment }),
+          ...(existingMsg.system && { system: true }),
+        });
+        if (updatedId !== existingMsg.id) {
+          existingIds.delete(existingMsg.id);
+          existingMsg.id = updatedId;
+          existingIds.add(updatedId);
+        }
+      }
+      continue;
+    }
+
     const id = hashMessage(transformedMsg);
     if (existingIds.has(id)) {
       continue; // Skip duplicate message
     }
 
     existingIds.add(id);
-    messages.push({ id, ...transformedMsg });
+    const newMsg = { id, ...transformedMsg };
+    existingByKey.set(key, newMsg);
+    messages.push(newMsg);
 
     // Log new message
     const dateStr = new Date(transformedMsg.date).toISOString().slice(0, 16).replace('T', ' ');
@@ -246,14 +389,24 @@ for (const zipPath of zipPaths) {
   try {
     fs.writeFileSync(`${groupDir}/data.json`, JSON.stringify(messages, null, 2));
 
+    // Save group metadata (display name, etc.)
+    fs.writeFileSync(`${groupDir}/group-info.json`, JSON.stringify({ name: groupName }, null, 2));
+
     // Persist attachment hash mapping for fast subsequent runs
-    const manifest: AttachmentManifest = {
+    const attachmentManifest: AttachmentManifest = {
       contentHashes: Object.fromEntries(contentHashMap),
     };
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    fs.writeFileSync(manifestPath, JSON.stringify(attachmentManifest, null, 2));
 
-    // Generate HTML viewer
-    generateHtml(groupName, messages, `${groupDir}/index.html`);
+    // Generate day-based chunks for lazy loading
+    const chunksDir = `${groupDir}/chunks`;
+    const { manifest: chunkManifest, latestDayMessages } = generateChunks(messages, chunksDir);
+    console.log(`  Generated ${chunkManifest.chunks.length} day chunks`);
+
+    // Generate HTML viewer with only latest chunk inline
+    const lastMessage = messages[messages.length - 1];
+    const lastUpdated = lastMessage ? new Date(lastMessage.date) : new Date();
+    generateHtml(groupName, latestDayMessages, chunkManifest, messages.length, lastUpdated, `${groupDir}/index.html`);
     console.log(`  Generated index.html`);
 
     console.log(`  Result: ${existingCount} existing + ${newCount} new = ${messages.length} total`);
@@ -266,8 +419,18 @@ for (const zipPath of zipPaths) {
 
 // Regenerate HTML for all groups and build index
 const groups: GroupInfo[] = [];
+const groupDirs: {
+  dir: string;
+  messages: MessageWithId[];
+  displayName: string;
+  chunkManifest: ChunkManifest;
+  latestDayMessages: MessageWithId[];
+}[] = [];
+
 try {
   const dirs = fs.readdirSync(outputDir, { withFileTypes: true });
+
+  // First pass: collect all valid groups
   for (const dir of dirs) {
     if (!dir.isDirectory()) continue;
 
@@ -277,17 +440,38 @@ try {
     try {
       const messages: MessageWithId[] = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
       const lastMessage = messages[messages.length - 1];
+
+      // Read display name from group-info.json, fallback to directory name
+      const groupInfoPath = `${outputDir}/${dir.name}/group-info.json`;
+      let displayName = dir.name;
+      if (fs.existsSync(groupInfoPath)) {
+        const groupInfo = JSON.parse(fs.readFileSync(groupInfoPath, 'utf-8'));
+        displayName = groupInfo.name || dir.name;
+      }
+
+      // Generate chunks once here and cache for reuse
+      const chunksDir = `${outputDir}/${dir.name}/chunks`;
+      const { manifest: chunkManifest, latestDayMessages } = generateChunks(messages, chunksDir);
+
       groups.push({
-        name: dir.name,
+        name: displayName,
+        slug: dir.name,
         messageCount: messages.length,
         lastMessageDate: lastMessage ? new Date(lastMessage.date) : undefined,
       });
 
-      // Regenerate HTML for this group
-      generateHtml(dir.name, messages, `${outputDir}/${dir.name}/index.html`);
+      groupDirs.push({ dir: dir.name, messages, displayName, chunkManifest, latestDayMessages });
     } catch {
       // Skip groups with invalid data
     }
+  }
+
+  // Second pass: regenerate HTML now that we know total group count (reuse cached chunks)
+  const showBackLink = groups.length > 1;
+  for (const { dir, messages, displayName, chunkManifest, latestDayMessages } of groupDirs) {
+    const lastMessage = messages[messages.length - 1];
+    const lastUpdated = lastMessage ? new Date(lastMessage.date) : new Date();
+    generateHtml(displayName, latestDayMessages, chunkManifest, messages.length, lastUpdated, `${outputDir}/${dir}/index.html`, showBackLink);
   }
 
   // Sort by last message date (most recent first)
