@@ -45,8 +45,10 @@ const LIGHTBOX_SCRIPT = `
     document.body.appendChild(lightbox);
 
     var isClosing = false;
+    var hasLightboxHistoryEntry = false;
 
-    function closeLightbox() {
+    function closeLightbox(options) {
+      options = options || {};
       if (isClosing) return;
       isClosing = true;
       // Pause any playing video
@@ -58,6 +60,15 @@ const LIGHTBOX_SCRIPT = `
         while (content.firstChild) content.removeChild(content.firstChild);
         isClosing = false;
       }, 120);
+
+      // Keep history clean: manual close removes the lightbox history entry.
+      if (!options.fromPopstate && hasLightboxHistoryEntry) {
+        hasLightboxHistoryEntry = false;
+        window.history.back();
+      } else if (options.fromPopstate) {
+        // Back button consumed the synthetic entry.
+        hasLightboxHistoryEntry = false;
+      }
     }
 
     // Close on clicking outside content or close button
@@ -109,7 +120,19 @@ const LIGHTBOX_SCRIPT = `
       }
       while (content.firstChild) content.removeChild(content.firstChild);
       content.appendChild(clone);
+      if (!lightbox.classList.contains('active') && !hasLightboxHistoryEntry) {
+        window.history.pushState({ lightbox: true }, '', window.location.href);
+        hasLightboxHistoryEntry = true;
+      }
       lightbox.classList.add('active');
+    });
+
+    window.addEventListener('popstate', function() {
+      if (lightbox.classList.contains('active')) {
+        closeLightbox({ fromPopstate: true });
+      } else {
+        hasLightboxHistoryEntry = false;
+      }
     });
   });
 })();
