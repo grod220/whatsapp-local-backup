@@ -1,21 +1,12 @@
-import * as crypto from 'crypto';
 import * as path from 'path';
-import type { MessageWithId } from './types.js';
-
-export function hashMessage(msg: Omit<MessageWithId, 'id'>): string {
-  // Truncate to minute precision - WhatsApp exports can vary by seconds
-  const dateToMinute = new Date(msg.date).toISOString().slice(0, 16);
-  const hashData = { ...msg, date: dateToMinute };
-  return crypto.createHash('sha256').update(JSON.stringify(hashData)).digest('hex');
-}
 
 export function extractGroupName(zipFilename: string): string {
-  const match = zipFilename.match(/^WhatsApp Chat - (.+)\.zip$/);
-  let rawName = match?.[1] ?? zipFilename.replace(/\.zip$/, '');
+  const match = zipFilename.match(/^WhatsApp Chat (?:with |[-–] )(.+)\.zip$/i);
+  let rawName = match?.[1] ?? zipFilename.replace(/\.zip$/i, '');
   // Strip macOS duplicate suffixes like " (1)", " (2)", etc.
   rawName = rawName.replace(/ \(\d+\)$/, '');
-  // Sanitize for filesystem safety: remove path separators and special chars
-  return rawName.replace(/[\/\\:*?"<>|]/g, '_').trim();
+  // The display name is also the chat identity; only slugify sanitizes paths.
+  return rawName.trim();
 }
 
 export function isMacOSArtifact(entryName: string): boolean {

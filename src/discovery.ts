@@ -1,9 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { extractGroupName } from './utils.js';
 
-const WHATSAPP_ZIP_PATTERN = /^WhatsApp Chat - .+\.zip$/;
+const WHATSAPP_ZIP_PATTERN = /^WhatsApp Chat (?:with |[-–] ).+\.zip$/i;
 
 export function getDownloadsPath(): string {
   return path.join(os.homedir(), 'Downloads');
@@ -20,33 +19,12 @@ export function discoverWhatsAppZips(directory: string): string[] {
 
   const entries = fs.readdirSync(directory, { withFileTypes: true });
 
-  // Collect all matching ZIPs with their metadata
-  const zipInfos: { path: string; groupName: string; mtime: number }[] = [];
-  for (const entry of entries) {
-    if (entry.isFile() && WHATSAPP_ZIP_PATTERN.test(entry.name)) {
-      const fullPath = path.join(directory, entry.name);
-      const stat = fs.statSync(fullPath);
-      zipInfos.push({
-        path: fullPath,
-        groupName: extractGroupName(entry.name),
-        mtime: stat.mtimeMs,
-      });
-    }
-  }
-
-  // Deduplicate by group name, keeping the newest (highest mtime)
-  const newestByGroup = new Map<string, { path: string; mtime: number }>();
-  for (const info of zipInfos) {
-    const existing = newestByGroup.get(info.groupName);
-    if (!existing || info.mtime > existing.mtime) {
-      newestByGroup.set(info.groupName, { path: info.path, mtime: info.mtime });
-    }
-  }
-
-  // Return deduplicated paths, sorted for consistent ordering
-  return Array.from(newestByGroup.values())
-    .map(v => v.path)
-    .sort();
+  // Every export may contain history/media missing from a newer phone's export.
+  return entries
+    .filter(entry => entry.isFile() && WHATSAPP_ZIP_PATTERN.test(entry.name))
+    .map(entry => ({ filename: path.join(directory, entry.name), mtime: fs.statSync(path.join(directory, entry.name)).mtimeMs }))
+    .sort((a, b) => a.mtime - b.mtime || a.filename.localeCompare(b.filename))
+    .map(entry => entry.filename);
 }
 
 export function generateOutputZipPath(desktopPath: string): string {

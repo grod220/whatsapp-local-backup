@@ -6,3 +6,8 @@ node_modules/
 .idea/
 .deploy-hash
 .wrangler/
+archive/
+restored-output/
+.backup-lock/
+backups/
+sources/

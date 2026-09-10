@@ -4,6 +4,8 @@ export interface MessageWithId {
   author: string | null;
   message: string;
   attachment?: string;
+  missingAttachment?: string;
+  source?: string; // SHA-256 of the original export in archive/sources
   system?: true;
 }
 

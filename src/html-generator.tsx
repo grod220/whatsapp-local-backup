@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { MessageWithId, ChunkManifest } from './types.js';
-import { isEmptyAuthorLine } from './utils.js';
+import { writeAtomic } from './storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAT_CSS = fs.readFileSync(path.join(__dirname, 'styles/chat.css'), 'utf-8');
@@ -285,7 +285,7 @@ const LOADER_SCRIPT = `
     var date = new Date(msg.date);
 
     if (msg.system) {
-      var content = msg.attachment ? renderAttachment(msg.attachment) : escapeHtml(msg.message);
+      var content = (msg.attachment ? renderAttachment(msg.attachment) : '') + escapeHtml(msg.message);
       return '<div class="message system"><div class="bubble">' + content + '</div></div>';
     }
 
@@ -471,7 +471,7 @@ function Message({ msg, eager }: { msg: MessageWithId; eager?: boolean | undefin
     return (
       <div class="message system">
         <div class="bubble">
-          {msg.attachment ? <Attachment filename={msg.attachment} eager={eager} /> : msg.message}
+          {msg.attachment && <Attachment filename={msg.attachment} eager={eager} />}{msg.message}
         </div>
       </div>
     );
@@ -516,10 +516,7 @@ function ChatViewer({
 }) {
   let lastDateStr = '';
 
-  // Filter out empty author lines (parsing artifacts)
-  const filteredMessages = messages.filter(
-    msg => !isEmptyAuthorLine(msg.author, msg.message) || msg.attachment
-  );
+  const filteredMessages = messages;
 
   // Embed manifest for the loader script
   // Escape < to prevent </script> injection via malicious filenames
@@ -670,10 +667,10 @@ export function generateHtml(
       showBackLink={showBackLink}
     />
   );
-  fs.writeFileSync(outputPath, html);
+  writeAtomic(outputPath, html);
 }
 
 export function generateIndex(groups: GroupInfo[], outputPath: string): void {
   const html = '<!DOCTYPE html>' + (<GroupList groups={groups} />);
-  fs.writeFileSync(outputPath, html);
+  writeAtomic(outputPath, html);
 }

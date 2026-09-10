@@ -3,10 +3,17 @@
   "version": "1.0.0",
   "description": "WhatsApp chat export parser with deduplication",
   "scripts": {
-    "parse": "tsc --noEmit && tsx src/index.ts && tsx scripts/deploy-if-changed.ts",
+    "parse": "tsc --noEmit && tsx src/index.ts",
     "refresh-html": "tsx scripts/rebuild-output-html.ts",
     "preview": "npm run refresh-html && node scripts/serve-output.mjs",
-    "local": "npm run preview"
+    "local": "npm run preview",
+    "backup": "tsx scripts/backup.ts",
+    "verify-backup": "tsx scripts/verify-backup.ts",
+    "compact-archive": "tsx scripts/compact-archive.ts",
+    "restore": "tsx scripts/restore.ts",
+    "deploy": "tsx scripts/deploy-if-changed.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
