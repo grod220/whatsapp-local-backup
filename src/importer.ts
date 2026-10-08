@@ -5,13 +5,18 @@ import { parseString } from 'whatsapp-chat-parser';
 import type { AttachmentManifest, MessageWithId } from './types.js';
 import { archiveSource } from './archive.js';
 import { mergeMessages } from './merge.js';
-import { isSafeFilename, readMessages, sha256, writeAtomic, writeImmutable } from './storage.js';
+import { isSafeFilename, parseMessages, sha256, writeAtomic, writeImmutable } from './storage.js';
 import { cleanUnicode, extractGroupName, isMacOSArtifact, isPathTraversal, isSystemMessage, slugify } from './utils.js';
 
 export function loadGroup(groupDir: string): { messages: MessageWithId[]; manifest: AttachmentManifest; name: string } {
-  const messages = readMessages(path.join(groupDir, 'data.json'));
-  const manifest = JSON.parse(fs.readFileSync(path.join(groupDir, 'manifest.json'), 'utf8')) as AttachmentManifest;
-  const info = JSON.parse(fs.readFileSync(path.join(groupDir, 'group-info.json'), 'utf8'));
+  return readGroupFiles(groupDir, relative => fs.readFileSync(path.join(groupDir, relative)));
+}
+
+/** Validate the same messages and media whether read locally or from a backup snapshot. */
+export function readGroupFiles(groupDir: string, readFile: (relative: string) => Buffer): ReturnType<typeof loadGroup> {
+  const messages = parseMessages(JSON.parse(readFile('data.json').toString('utf8')), `${groupDir}/data.json`);
+  const manifest = JSON.parse(readFile('manifest.json').toString('utf8')) as AttachmentManifest;
+  const info = JSON.parse(readFile('group-info.json').toString('utf8'));
   if (typeof info.name !== 'string' || !info.name || !manifest.contentHashes
     || typeof manifest.contentHashes !== 'object' || Array.isArray(manifest.contentHashes)) {
     throw new Error(`Invalid group metadata: ${groupDir}`);
@@ -19,7 +24,7 @@ export function loadGroup(groupDir: string): { messages: MessageWithId[]; manife
   const filenames = new Set<string>();
   for (const [hash, filename] of Object.entries(manifest.contentHashes)) {
     if (!/^[a-f0-9]{64}$/.test(hash) || !isSafeFilename(filename)) throw new Error(`Invalid attachment manifest: ${groupDir}`);
-    const bytes = fs.readFileSync(path.join(groupDir, 'attachments', filename));
+    const bytes = readFile(`attachments/${filename}`);
     if (sha256(bytes) !== hash) throw new Error(`Media integrity check failed: ${path.join(groupDir, 'attachments', filename)}`);
     filenames.add(filename);
   }

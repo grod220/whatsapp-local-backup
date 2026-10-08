@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import vm from 'node:vm';
 import AdmZip from 'adm-zip';
 import { captureSnapshot, restoreSnapshot, verifyContinuity, sourcesDirectory, latestSnapshotHash, readSnapshot, objectPath } from '../src/archive.js';
 import { discoverWhatsAppZips } from '../src/discovery.js';
@@ -434,3 +435,148 @@ test('missing media from any historical snapshot blocks packaging, even if the c
   fs.unlinkSync(path.join(f.output, 'family/attachments', attachment));
   assert.throws(() => createOutputZip(f.output, path.join(f.workspace, 'backup.zip'), f.archive), /media is missing/);
 });
+
+for (const artifact of ['.DS_Store', 'orphan.jpg.12345678-1234-1234-1234-123456789abc.tmp']) {
+  test(`portable backups retain snapshot references to ${artifact}`, t => {
+    const f = fixture(t);
+    f.run(f.zip('WhatsApp Chat - Family.zip', line(20, 1, '<attached: photo.jpg>'), { 'photo.jpg': 'family photo' }));
+    const relative = `family/attachments/${artifact}`;
+    fs.writeFileSync(path.join(f.output, relative), 'previously snapshotted bytes');
+    captureSnapshot(f.output, f.archive);
+    const snapshot = latestSnapshotHash(f.archive);
+    renderOutput(f.output);
+    const backup = path.join(f.workspace, 'backup.zip');
+    createOutputZip(f.output, backup, f.archive);
+    verifyPortableBackup(backup);
+    const unpacked = path.join(f.workspace, 'unpacked');
+    new AdmZip(backup).extractAllTo(unpacked);
+    const recovered = path.join(f.workspace, 'recovered');
+    restoreSnapshot(path.join(unpacked, 'archive'), recovered, snapshot);
+    assert.deepEqual(loadGroup(path.join(recovered, 'family')), f.read());
+    assert.equal(fs.readFileSync(path.join(recovered, relative), 'utf8'), 'previously snapshotted bytes');
+  });
+}
+
+for (const removed of ['photo', 'metadata', 'latest', 'snapshot']) {
+  test(`standalone verification rejects a checksum-consistent backup missing ${removed}`, t => {
+    const f = fixture(t);
+    f.run(f.zip('WhatsApp Chat - Family.zip', line(20, 1, '<attached: photo.jpg>'), { 'photo.jpg': 'family photo' }));
+    renderOutput(f.output);
+    const backup = path.join(f.workspace, 'backup.zip');
+    createOutputZip(f.output, backup, f.archive);
+    const zip = new AdmZip(backup);
+    const manifest = JSON.parse(zip.readAsText('backup.json'));
+    const snapshot = readSnapshot(f.archive, latestSnapshotHash(f.archive));
+    const relative = removed === 'photo' ? `output/family/attachments/${f.read().messages[0]!.attachment!}`
+      : removed === 'metadata' ? `archive/objects/${snapshot.files['family/data.json']}`
+      : removed === 'latest' ? 'archive/latest.json'
+      : `archive/snapshots/${latestSnapshotHash(f.archive)}.json`;
+    zip.deleteFile(relative);
+    delete manifest.files[relative];
+    zip.updateFile('backup.json', Buffer.from(JSON.stringify(manifest)));
+    const broken = path.join(f.workspace, 'incomplete.zip');
+    zip.writeZip(broken);
+    assert.throws(() => verifyPortableBackup(broken), /missing|absent/i);
+  });
+}
+
+test('missing original exports are reported accurately while a restored collection can still be backed up', t => {
+  const f = fixture(t);
+  f.run(f.zip('WhatsApp Chat - Family.zip', line(20, 1, '<attached: photo.jpg>'), { 'photo.jpg': 'family photo' }));
+  renderOutput(f.output);
+  const source = fs.readdirSync(sourcesDirectory(f.archive))[0]!;
+  fs.unlinkSync(path.join(sourcesDirectory(f.archive), source));
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = message => warnings.push(String(message));
+  const backup = path.join(f.workspace, 'restored-collection.zip');
+  try { createOutputZip(f.output, backup, f.archive); }
+  finally { console.warn = warn; }
+  const manifest = JSON.parse(new AdmZip(backup).readAsText('backup.json'));
+  assert.deepEqual(manifest.missingSources, [source.slice(0, -4)]);
+  assert.match(warnings.join('\n'), /original export.*missing/i);
+  verifyPortableBackup(backup);
+  const unpacked = path.join(f.workspace, 'unpacked');
+  new AdmZip(backup).extractAllTo(unpacked);
+  const recovered = path.join(f.workspace, 'recovered');
+  restoreSnapshot(path.join(unpacked, 'archive'), recovered);
+  assert.deepEqual(loadGroup(path.join(recovered, 'family')), f.read());
+});
+
+for (const location of ['sources', 'legacy', 'both']) {
+  test(`damaged original exports in ${location} stop packaging before a new backup is saved`, t => {
+    const f = fixture(t);
+    f.run(f.zip('WhatsApp Chat - Family.zip', line(20, 1, 'Existing')));
+    renderOutput(f.output);
+    const filename = fs.readdirSync(sourcesDirectory(f.archive))[0]!;
+    const current = path.join(sourcesDirectory(f.archive), filename);
+    if (location !== 'sources') {
+      fs.mkdirSync(path.join(f.archive, 'sources'));
+      fs.copyFileSync(current, path.join(f.archive, 'sources', filename));
+      if (location === 'legacy') fs.unlinkSync(current);
+      fs.writeFileSync(path.join(f.archive, 'sources', filename), 'damaged');
+    } else fs.writeFileSync(current, 'damaged');
+    const backup = path.join(f.workspace, 'backup.zip');
+    assert.throws(() => createOutputZip(f.output, backup, f.archive), /Damaged original export/);
+    assert.equal(fs.existsSync(backup), false);
+    assert.equal(f.read().messages.length, 1);
+  });
+}
+
+for (const failure of ['network', 'empty response', 'missing callback', 'timeout']) {
+  test(`viewer retries the same day after ${failure} and advances only after success`, t => {
+    const f = fixture(t);
+    f.run(f.zip('WhatsApp Chat - Family.zip', [line(20, 1, 'Oldest'), line(21, 1, 'Older'), line(22, 1, 'Newest')].join('\n')));
+    renderOutput(f.output);
+    const html = fs.readFileSync(path.join(f.output, 'family/index.html'), 'utf8');
+    const loaderScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!)
+      .find(script => script.includes('var nextChunkIndex = 1;'))!;
+    const scripts: any[] = [];
+    const timeouts: Array<{ callback: () => void; ms: number }> = [];
+    const listeners: Record<string, Array<() => void>> = {};
+    const classes = new Set<string>();
+    const element = () => ({ textContent: '', innerHTML: '', children: [] as any[],
+      classList: { add: (name: string) => classes.add(name), remove: (name: string) => classes.delete(name) },
+      appendChild(child: any) { this.children.push(child); }, remove() {}, insertAdjacentElement() {} });
+    const loader = element();
+    const sentinel = { getBoundingClientRect: () => ({ top: 0, bottom: 1 }) };
+    const window = {
+      innerHeight: 800, scrollY: 0, scrollTo() {},
+      addEventListener(event: string, callback: () => void) { (listeners[event] ??= []).push(callback); },
+      __CHUNK_MANIFEST__: JSON.parse(fs.readFileSync(path.join(f.output, 'family/chunks/manifest.json'), 'utf8')),
+    };
+    vm.runInNewContext(loaderScript, {
+      window, Date, console: { error() {} },
+      document: {
+        body: { scrollHeight: 1000 }, documentElement: { scrollHeight: 1000 },
+        getElementById: (id: string) => id === 'load-sentinel' ? sentinel : loader,
+        createElement: element, head: { appendChild: (script: any) => scripts.push(script) },
+      },
+      setTimeout(callback: () => void, ms: number) {
+        timeouts.push({ callback, ms });
+        if (ms === 200) callback();
+        return timeouts.length;
+      },
+      clearTimeout() {}, requestAnimationFrame(callback: () => void) { callback(); },
+    });
+    assert.equal(scripts[0].src, 'chunks/2026-01-21.js');
+    if (failure === 'network') scripts[0].onerror();
+    else if (failure === 'empty response') (window as any).__loadChunk('2026-01-21', []);
+    else if (failure === 'missing callback') scripts[0].onload();
+    else timeouts.find(timer => timer.ms === 15000)!.callback();
+    assert.match(loader.textContent, /could not load/i);
+    assert.ok(classes.has('visible'), 'the failure stays visible');
+    for (const listener of listeners.scroll!) listener();
+    assert.equal(scripts.length, 1, 'scrolling does not cause an endless retry loop or skip to the next day');
+    const retry = loader.children.at(-1)!;
+    assert.equal(retry.textContent, 'Retry');
+    if (failure === 'timeout') listeners.online![0]!();
+    else retry.onclick();
+    assert.equal(scripts[1].src, scripts[0].src);
+    vm.runInNewContext(fs.readFileSync(path.join(f.output, 'family/chunks/2026-01-21.js'), 'utf8'), { window });
+    scripts[1].onload();
+    assert.ok(!classes.has('error'));
+    for (const listener of listeners.scroll!) listener();
+    assert.equal(scripts[2].src, 'chunks/2026-01-20.js');
+  });
+}

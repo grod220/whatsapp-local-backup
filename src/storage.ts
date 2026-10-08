@@ -73,7 +73,10 @@ export function isSafeFilename(value: unknown): value is string {
 }
 
 export function readMessages(filename: string): MessageWithId[] {
-  const messages: unknown = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  return parseMessages(JSON.parse(fs.readFileSync(filename, 'utf8')), filename);
+}
+
+export function parseMessages(messages: unknown, filename: string): MessageWithId[] {
   if (!Array.isArray(messages) || messages.some(msg => !msg || typeof msg !== 'object'
     || typeof msg.id !== 'string' || typeof msg.date !== 'string' || !Number.isFinite(Date.parse(msg.date))
     || (msg.author !== null && typeof msg.author !== 'string') || typeof msg.message !== 'string'

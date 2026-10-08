@@ -207,6 +207,9 @@ const LOADER_SCRIPT = `
   // The first chunk (index 0, newest) is already inline
   var nextChunkIndex = 1;
   var isLoading = false;
+  var loadFailed = false;
+  var loadingScript = null;
+  var loadTimeout = null;
   var loaderShownAt = 0;
   var loaderHideTimeout = null;
   var MIN_LOADER_TIME = 800;
@@ -216,6 +219,8 @@ const LOADER_SCRIPT = `
       clearTimeout(loaderHideTimeout);
       loaderHideTimeout = null;
     }
+    loader.classList.remove('error');
+    loader.textContent = 'Loading messages...';
     loader.classList.add('visible');
     loaderShownAt = Date.now();
   }
@@ -230,6 +235,34 @@ const LOADER_SCRIPT = `
     } else {
       loader.classList.remove('visible');
     }
+  }
+
+  function clearRequest() {
+    if (loadTimeout) clearTimeout(loadTimeout);
+    loadTimeout = null;
+    if (loadingScript) loadingScript.remove();
+    loadingScript = null;
+  }
+
+  function retryChunk() {
+    loadFailed = false;
+    loadNextChunk();
+  }
+
+  function failChunk() {
+    isLoading = false;
+    loadFailed = true;
+    clearRequest();
+    if (loaderHideTimeout) clearTimeout(loaderHideTimeout);
+    loaderHideTimeout = null;
+    loader.classList.add('visible');
+    loader.classList.add('error');
+    loader.textContent = 'Could not load older messages. ';
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = 'Retry';
+    retry.onclick = retryChunk;
+    loader.appendChild(retry);
   }
 
   // Author color function (same as server-side)
@@ -310,7 +343,12 @@ const LOADER_SCRIPT = `
 
   // JSONP callback - receives loaded chunk data
   window.__loadChunk = function(dateKey, messages) {
-    if (!messages || messages.length === 0) return;
+    var expected = manifest.chunks[nextChunkIndex];
+    if (!isLoading || !expected || dateKey !== expected.date) return;
+    if (!Array.isArray(messages) || messages.length !== expected.messageCount || messages.length === 0) {
+      failChunk();
+      return;
+    }
 
     // Build HTML for the chunk
     var html = '';
@@ -351,6 +389,7 @@ const LOADER_SCRIPT = `
     window.scrollTo(0, prevScrollTop + (newScrollHeight - prevScrollHeight));
 
     isLoading = false;
+    clearRequest();
     hideLoader();
     nextChunkIndex++;
 
@@ -364,22 +403,33 @@ const LOADER_SCRIPT = `
   };
 
   function loadNextChunk() {
-    if (isLoading || nextChunkIndex >= manifest.chunks.length) return;
+    if (isLoading || loadFailed || nextChunkIndex >= manifest.chunks.length) return;
 
     isLoading = true;
     showLoader();
 
     var chunk = manifest.chunks[nextChunkIndex];
     var script = document.createElement('script');
+    loadingScript = script;
     script.src = 'chunks/' + chunk.filename;
     script.onerror = function() {
-      isLoading = false;
-      hideLoader();
-      nextChunkIndex++;  // Skip failed chunk to prevent infinite retry
+      if (loadingScript !== script) return;
+      failChunk();
       console.error('Failed to load chunk:', chunk.filename);
     };
+    script.onload = function() {
+      // A fetched script that did not provide the expected JSONP data also failed.
+      if (loadingScript === script) failChunk();
+    };
+    loadTimeout = setTimeout(function() {
+      if (loadingScript === script) failChunk();
+    }, 15000);
     document.head.appendChild(script);
   }
+
+  window.addEventListener('online', function() {
+    if (loadFailed && sentinelVisible()) retryChunk();
+  });
 
   // Use IntersectionObserver to detect when user scrolls near the top
   if (typeof IntersectionObserver !== 'undefined') {

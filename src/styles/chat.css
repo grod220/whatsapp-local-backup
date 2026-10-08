@@ -154,6 +154,25 @@ body::-webkit-scrollbar {
   opacity: 1;
 }
 
+.chunk-loader.error {
+  pointer-events: auto;
+  background: var(--toggle-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: calc(100vw - 32px);
+}
+
+.chunk-loader.error::before {
+  display: none;
+}
+
+.chunk-loader button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  margin-left: 6px;
+}
+
 .chunk-loader::before {
   content: '';
   display: inline-block;

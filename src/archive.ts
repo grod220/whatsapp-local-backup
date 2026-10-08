@@ -26,6 +26,12 @@ export function isMediaPath(relative: string): boolean {
 export function readSnapshot(archiveDir: string, hash: string): Snapshot {
   objectPath(archiveDir, hash); // Validate the hash before using it in a path.
   const data = fs.readFileSync(path.join(archiveDir, 'snapshots', `${hash}.json`));
+  return parseSnapshot(data, hash);
+}
+
+/** Shared by local recovery and standalone ZIP verification. */
+export function parseSnapshot(data: Buffer, hash: string): Snapshot {
+  objectPath('', hash);
   if (sha256(data) !== hash) throw new Error(`Damaged snapshot: ${hash}`);
   const snapshot = JSON.parse(data.toString('utf8')) as Snapshot;
   if (![1, 2].includes(snapshot.version) || !snapshot.files || typeof snapshot.files !== 'object' || Array.isArray(snapshot.files)) {
@@ -37,7 +43,7 @@ export function readSnapshot(archiveDir: string, hash: string): Snapshot {
       || (parts.length === 2 && ['data.json', 'manifest.json', 'group-info.json'].includes(parts[1]!)))) {
       throw new Error('Invalid snapshot path');
     }
-    objectPath(archiveDir, object);
+    objectPath('', object);
   }
   return snapshot;
 }
@@ -170,15 +176,42 @@ export function sourceInventory(archiveDir: string): Array<{ sha256: string; ori
   if (fs.existsSync(receipts)) {
     for (const name of fs.readdirSync(receipts).filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
       const bytes = fs.readFileSync(path.join(receipts, name));
-      if (`${sha256(bytes)}.json` !== name) throw new Error(`Damaged source receipt: ${name}`);
-      const receipt = JSON.parse(bytes.toString('utf8'));
-      objectPath(archiveDir, receipt.sha256);
-      if (typeof receipt.originalName !== 'string') throw new Error(`Invalid source receipt: ${name}`);
+      const receipt = parseSourceReceipt(bytes, name.slice(0, -5));
       if (!sources.has(receipt.sha256)) sources.set(receipt.sha256, new Set());
       sources.get(receipt.sha256)!.add(receipt.originalName);
     }
   }
   return [...sources].sort(([a], [b]) => a.localeCompare(b)).map(([hash, names]) => ({ sha256: hash, originalNames: [...names].sort() }));
+}
+
+export function parseSourceReceipt(bytes: Buffer, hash: string): { sha256: string; originalName: string } {
+  if (sha256(bytes) !== hash) throw new Error(`Damaged source receipt: ${hash}`);
+  const receipt = JSON.parse(bytes.toString('utf8'));
+  objectPath('', receipt.sha256);
+  if (typeof receipt.originalName !== 'string') throw new Error(`Invalid source receipt: ${hash}`);
+  return receipt;
+}
+
+/** Check every retained copy; receipts alone do not prove that originals still exist. */
+export function auditSources(archiveDir: string): { sources: ReturnType<typeof sourceInventory>; missing: string[] } {
+  const sources = sourceInventory(archiveDir);
+  const missing: string[] = [];
+  for (const source of sources) {
+    let found = false;
+    for (const directory of [sourcesDirectory(archiveDir), path.join(archiveDir, 'sources')]) {
+      const filename = path.join(directory, `${source.sha256}.zip`);
+      try {
+        if (!fs.lstatSync(filename).isFile() || sha256(fs.readFileSync(filename)) !== source.sha256) {
+          throw new Error(`Damaged original export: ${filename}. Recover the intact original from a separate backup.`);
+        }
+        found = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    if (!found) missing.push(source.sha256);
+  }
+  return { sources, missing };
 }
 
 /** Restore into a new directory. Media comes from a legacy object or a verified full backup's output/. */

@@ -58,10 +58,16 @@ A v2 ZIP contains:
 
 - `output/`, including the offline viewer and each media file once.
 - `archive/`, including all retained message/metadata history, snapshot inventories, and source receipts. Duplicate media objects and raw source ZIPs are excluded.
-- `backup.json`, a versioned checksum inventory and list of separately retained source exports.
+- `backup.json`, a versioned checksum inventory, list of separate source exports, and any originals missing locally when the backup was created.
 - `README.txt`, with recovery instructions.
 
 Unzip and open `output/index.html` in a browser. Reading the current collection requires no server or project installation. The ZIP preserves the cumulative viewer and its snapshot history. **Original WhatsApp ZIPs are separate**: save each file in `sources/` to offsite storage once, for example a `RawSources` subfolder beside the dated cumulative backups. Including overlapping originals in every cumulative ZIP would repeatedly duplicate their media. `backup.json` records which originals belong to the archive, but does not contain their bytes.
+
+Before saving a new ZIP, the backup command checks the bytes of every recorded original export found in `sources/` or legacy `archive/sources/`. A damaged original stops packaging. Missing originals produce a warning and are recorded in `backup.json`; the cumulative messages and media can still be backed up, including after recovery on a new computer without the separate originals. Recover missing originals from your source backup. Only originals that actually passed their checksum check are reported as retained locally.
+
+`verify-backup` checks every stored checksum and follows every snapshot reference to its metadata and media. It also validates each snapshot's messages, group metadata, and attachment manifest, and checks that the latest output matches its snapshot. A checksum-consistent ZIP with a missing photo or recovery file fails verification. Snapshot references to hidden or temporary files are preserved in the ZIP. For older v2 ZIPs, `originalExports.missingAtCreation` is `null` because original-source availability was not checked at creation; verification of a cumulative ZIP cannot verify separately stored originals.
+
+If an older day fails to download in the viewer, an error and **Retry** button remain visible. Retry requests that same day; the viewer advances only after its messages have loaded. Reconnecting also retries a failed download when the older messages are in view.
 
 Imports and backups do not automatically upload anything to Google Drive. Keep dated cumulative ZIPs in Clement/Clemcast, retain previous backups, and verify a downloaded copy. Keep the original source collection separately. Git excludes all private data directories; cloning this repository does not restore your conversations.
 
