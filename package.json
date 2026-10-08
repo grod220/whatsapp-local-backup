@@ -20,7 +20,7 @@
   "license": "ISC",
   "type": "module",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@kitajs/html": "^4.2.11",
@@ -31,6 +31,7 @@
     "@types/adm-zip": "^0.5.7",
     "@types/node": "^25.0.10",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.148.0"
   }
 }

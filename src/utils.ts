@@ -28,28 +28,36 @@ export function isEmptyAuthorLine(author: string | null, message: string): boole
   return /^[^:\n]+:\s*$/.test(message);
 }
 
-export function isSystemMessage(author: string | null, message: string): boolean {
+export function isSystemMessage(author: string | null, message: string, knownAuthors: readonly string[] = []): boolean {
   if (author === null) return true;
+  // Some exports attribute notices to a contact. Match complete notice lines,
+  // never action words embedded in a person's update.
+  if (/[\r\n]/.test(message)) return false;
 
-  const systemPatterns = [
-    /^Messages and calls are end-to-end encrypted/,
-    /created (this )?group/,
-    /changed the group (description|name|icon)/,
-    / added /,
-    / removed /,
-    / joined using /,
-    / left$/,
-    /requested to add/,
-    /^Missed (video|voice) call/,
-    /^You're now an admin$/,
-    /is no longer an admin$/,
-    /turned on disappearing messages/,
-    /changed the settings/,
-    /can invite new members using a group link$/,
-    /turned on admin approval to join this group$/,
+  const escapePattern = (name: string) => name.replace(/[.*+?^{}$()|[\]\\]/g, '\\$&');
+  const actors = [...new Set(['You', author, ...knownAuthors])];
+  const actor = '(?:' + actors.map(escapePattern).join('|') + ')';
+  const actions = [
+    'created (?:this )?group(?: .+)?',
+    'changed the group (?:description|name|icon)(?: .+)?',
+    '(?:added|removed) .+',
+    'joined using (?:(?:a|this) group link|your invite)',
+    'left',
+    'requested to add .+',
+    'is no longer an admin',
+    'turned on disappearing messages(?: .+)?',
+    'changed the settings(?: .+)?',
+    'turned on admin approval to join this group',
   ];
-
-  return systemPatterns.some(pattern => pattern.test(message));
+  const actionNotice = new RegExp('^' + actor + ' (?:' + actions.join('|') + ')\\.?$');
+  // A contact who never posts may still add/remove the attributed recipient.
+  const membershipNotice = new RegExp('^[^\\n:]+ (?:added|removed) ' + escapePattern(author) + '\\.?$');
+  return actionNotice.test(message)
+    || membershipNotice.test(message)
+    || /^Messages and calls are end-to-end encrypted(?:\..*)?$/.test(message)
+    || /^Missed (video|voice) call\.?$/.test(message)
+    || /^You're now an admin\.?$/.test(message)
+    || /^Anyone in this group can invite new members using a group link\.?$/.test(message);
 }
 
 // Clean Unicode artifacts: directional formatting chars and normalize non-breaking hyphens

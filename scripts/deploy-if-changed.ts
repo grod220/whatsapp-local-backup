@@ -58,6 +58,10 @@ function deploy(): void {
     { stdio: 'inherit' }
   );
 
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+    throw new Error('Wrangler is not installed. Run npm install --include=dev, then retry npm run deploy.');
+  }
+
   if (result.status !== 0) {
     throw new Error(`Deployment failed: ${result.error?.message ?? `exit ${result.status}`}`);
   }

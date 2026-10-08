@@ -45,6 +45,58 @@ function fixture(t: { after: (fn: () => void) => void }) {
 
 const line = (day: number, second: number, message: string) => `[${day}/01/2026, 12:00:${String(second).padStart(2, '0')}] Alex: ${message}`;
 
+test('authored updates mentioning group actions remain regular messages on import', t => {
+  const f = fixture(t);
+  const updates = [
+    'It’s been added to the evening bathing ritual 🪥',
+    'We removed the old toy from his crib.',
+    'I changed the settings on the camera.',
+    'I created this group of photos for the album.',
+    'We joined using our family ticket.',
+    'There are only two snacks left',
+    'A family update\n\nIt’s been added to the evening bathing ritual 🪥',
+  ];
+  f.run(f.zip('WhatsApp Chat - Family.zip', updates.map((message, i) => line(20, i + 1, message)).join('\n')));
+  for (const message of f.read().messages) {
+    assert.equal(message.author, 'Alex');
+    assert.equal(message.system, undefined, message.message);
+  }
+});
+
+test('rebuilding fixes stale system flags in the latest HTML and older chunks without changing archived records', t => {
+  const f = fixture(t);
+  const update = 'A family update\n\nIt’s been added to the evening bathing ritual 🪥';
+  importBackup(f.zip('WhatsApp Chat - Family.zip', [
+    line(20, 1, update),
+    line(21, 1, 'Sam added Alex'),
+    '[21/01/2026, 12:00:02] Sam: Hello',
+    '[21/01/2026, 12:00:03] Messages and calls are end-to-end encrypted.',
+    line(21, 4, update),
+    line(21, 5, 'Pat added Alex'),
+    '[21/01/2026, 12:00:06] Sam: Sam joined using your invite',
+    '[21/01/2026, 12:00:07] Alex (Dad): Pat added Alex (Dad)',
+  ].join('\n')), f.output, f.archive, { daysFirst: true });
+  const dataPath = path.join(f.output, 'family/data.json');
+  // Simulate records imported by the old substring classifier.
+  const stored = f.read().messages.map(message => message.message === update ? { ...message, system: true as const } : message);
+  fs.writeFileSync(dataPath, JSON.stringify(stored, null, 2));
+  captureSnapshot(f.output, f.archive);
+  const original = fs.readFileSync(dataPath);
+  renderOutput(f.output);
+  const html = fs.readFileSync(path.join(f.output, 'family/index.html'), 'utf8');
+  assert.ok(html.includes(`<div class="text">${update}</div>`), 'latest update keeps the regular text wrapper and paragraph breaks');
+  assert.match(html, /class="message system"><div class="bubble">Sam added Alex<\/div>/);
+  assert.match(html, /class="message system"><div class="bubble">Pat added Alex<\/div>/);
+  assert.match(html, /class="message system"><div class="bubble">Sam joined using your invite<\/div>/);
+  assert.match(html, /class="message system"><div class="bubble">Pat added Alex \(Dad\)<\/div>/);
+  assert.match(html, /class="message system"><div class="bubble">Messages and calls are end-to-end encrypted\.<\/div>/);
+  const chunk = fs.readFileSync(path.join(f.output, 'family/chunks/2026-01-20.js'), 'utf8');
+  const older = JSON.parse(chunk.slice(chunk.indexOf(', ') + 2, -2)) as MessageWithId[];
+  assert.equal(older[0]!.system, undefined, 'lazy-loaded older updates use the same corrected classification');
+  assert.deepEqual(fs.readFileSync(dataPath), original);
+  verifyContinuity(f.output, f.archive);
+});
+
 test('older and newer phones form a cumulative union; replay and shorter exports do not remove records or media', t => {
   const f = fixture(t);
   const old = f.zip('WhatsApp Chat - Family.zip', [line(20, 1, 'Old phone'), line(21, 2, '<attached: photo.jpg>')].join('\n'), { 'photo.jpg': 'old photo' });

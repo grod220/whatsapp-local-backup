@@ -85,6 +85,8 @@ export function importBackup(zipPath: string, outputDir: string, archiveDir: str
   if (!parsed.length || parsed.some(msg => !Number.isFinite(msg.date.getTime()))) {
     throw new Error('No valid messages parsed. Original ZIP preserved; existing history was not replaced.');
   }
+  const knownAuthors = [...new Set([...previous.messages, ...parsed]
+    .flatMap(msg => msg.author === null ? [] : [cleanUnicode(msg.author)]))];
 
   const filenameMap = new Map<string, string>();
   const pendingFiles = new Map<string, Buffer>();
@@ -121,7 +123,7 @@ export function importBackup(zipPath: string, outputDir: string, archiveDir: str
       date: msg.date, author, message,
       ...(attachment !== undefined && { attachment }),
       ...(original && !attachment && { missingAttachment: original }),
-      ...(isSystemMessage(author, message) && { system: true as const }),
+      ...(isSystemMessage(author, message, knownAuthors) && { system: true as const }),
       source: source.hash,
     };
   });

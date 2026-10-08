@@ -4,6 +4,7 @@ import type { MessageWithId, ChunkManifest, ChunkInfo } from './types.js';
 import { writeAtomic } from './storage.js';
 import { loadGroup } from './importer.js';
 import { generateHtml, generateIndex, type GroupInfo } from './html-generator.js';
+import { isSystemMessage } from './utils.js';
 
 /**
  * Groups messages by local day (YYYY-MM-DD) for chunked loading.
@@ -93,7 +94,14 @@ export function renderOutput(outputDir: string): void {
   for (const dir of dirs) {
     const groupDir = path.join(outputDir, dir.name);
     const { messages, name } = loadGroup(groupDir);
-    const { manifest, latestDayMessages } = generateChunks(messages, path.join(groupDir, 'chunks'));
+    const knownAuthors = [...new Set(messages.flatMap(msg => msg.author === null ? [] : [msg.author]))];
+    // Reclassify display copies so old false-positive flags do not survive a
+    // rebuild. Canonical records and historical snapshots remain untouched.
+    const displayMessages = messages.map(({ system, ...msg }) => ({
+      ...msg,
+      ...(isSystemMessage(msg.author, msg.message, knownAuthors) && { system: true as const }),
+    }));
+    const { manifest, latestDayMessages } = generateChunks(displayMessages, path.join(groupDir, 'chunks'));
     const lastMessage = messages[messages.length - 1];
     const lastUpdated = lastMessage ? new Date(lastMessage.date) : new Date();
     generateHtml(name, latestDayMessages, manifest, messages.length, lastUpdated, path.join(groupDir, 'index.html'), dirs.length > 1);

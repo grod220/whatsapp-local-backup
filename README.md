@@ -18,6 +18,17 @@ npm run parse -- --backup-to "/Volumes/Backup/clemcast-2026-09-10.zip" "/path/to
 
 Successful runs create a uniquely named cumulative ZIP on the Desktop by default. Existing backup ZIPs are never replaced. `npm run preview` opens the local viewer. Publishing is separate: `npm run deploy` verifies the collection before publishing `output/`.
 
+## Publish to Cloudflare Pages
+
+Use Node.js 22 or newer. `npm install` includes the project's local Wrangler CLI; a global installation is not needed. Authenticate with Cloudflare once, then deploy:
+
+```sh
+npx wrangler login
+npm run deploy
+```
+
+The default Pages project is `clemcast`; set `DEPLOY_PROJECT` to use another project. Unchanged output skips deployment. A failed deployment leaves the saved deploy hash unchanged, so retrying will still publish the pending changes. If dependencies were installed without development tools, run `npm install --include=dev` first.
+
 ## Storage and retention
 
 - **`output/`** is the cumulative message database, media collection, and offline viewer. Imports preserve every existing record, ID, and media file. Matching media is reused by content hash; different bytes with the same exported filename are retained separately.
