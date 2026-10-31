@@ -40,6 +40,7 @@ export function isSystemMessage(author: string | null, message: string, knownAut
   const actions = [
     'created (?:this )?group(?: .+)?',
     'changed the group (?:description|name|icon)(?: .+)?',
+    "changed (?:this|the) group(?:'s|’s) icon",
     '(?:added|removed) .+',
     'joined using (?:(?:a|this) group link|your invite)',
     'left',
@@ -54,6 +55,7 @@ export function isSystemMessage(author: string | null, message: string, knownAut
   const membershipNotice = new RegExp('^[^\\n:]+ (?:added|removed) ' + escapePattern(author) + '\\.?$');
   return actionNotice.test(message)
     || membershipNotice.test(message)
+    || new RegExp('^' + escapePattern(author) + ' was added\\.?$').test(message)
     || /^Messages and calls are end-to-end encrypted(?:\..*)?$/.test(message)
     || /^Missed (video|voice) call\.?$/.test(message)
     || /^You're now an admin\.?$/.test(message)

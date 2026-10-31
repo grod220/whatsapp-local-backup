@@ -1,10 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { MessageWithId, ChunkManifest, ChunkInfo } from './types.js';
-import { writeAtomic } from './storage.js';
+import { sha256, writeAtomic } from './storage.js';
 import { loadGroup } from './importer.js';
 import { generateHtml, generateIndex, type GroupInfo } from './html-generator.js';
 import { isSystemMessage } from './utils.js';
+import { allObservations, reconcileMessages, validateReconciliation } from './reconciliation.js';
+import { generateProvenance } from './provenance.js';
+import { DISPLAY_TIME_ZONE, VIEW_VERSION } from './settings.js';
 
 /**
  * Groups messages by local day (YYYY-MM-DD) for chunked loading.
@@ -19,10 +22,7 @@ function groupMessagesByDay(messages: MessageWithId[]): Map<string, MessageWithI
     // Skip invalid dates
     if (isNaN(date.getTime())) continue;
     // Use local date to match UI display (toDateString uses local timezone)
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const dayKey = `${year}-${month}-${day}`; // Local date "2024-01-15"
+    const dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: DISPLAY_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 
     if (!byDay.has(dayKey)) {
       byDay.set(dayKey, []);
@@ -79,6 +79,7 @@ export function generateChunks(
 
   const manifest: ChunkManifest = {
     totalMessages: messages.length,
+    timeZone: DISPLAY_TIME_ZONE,
     chunks,
   };
 
@@ -93,19 +94,39 @@ export function renderOutput(outputDir: string): void {
   const dirs = fs.readdirSync(outputDir, { withFileTypes: true }).filter(dir => dir.isDirectory());
   for (const dir of dirs) {
     const groupDir = path.join(outputDir, dir.name);
-    const { messages, name } = loadGroup(groupDir);
+    const { messages, manifest: attachments, name, evidence, decisions, reconciliation: previous } = loadGroup(groupDir);
     const knownAuthors = [...new Set(messages.flatMap(msg => msg.author === null ? [] : [msg.author]))];
     // Reclassify display copies so old false-positive flags do not survive a
     // rebuild. Canonical records and historical snapshots remain untouched.
-    const displayMessages = messages.map(({ system, ...msg }) => ({
+    const observations = allObservations(messages, evidence);
+    const reconciled = reconcileMessages(messages, attachments, evidence, decisions, previous);
+    const revision = sha256(JSON.stringify([VIEW_VERSION, reconciled.algorithm, reconciled.inputHash]));
+    validateReconciliation(reconciled, observations);
+    writeAtomic(path.join(groupDir, 'reconciliation.json'), JSON.stringify(reconciled, null, 2));
+    const displayMessages = reconciled.posts.filter(post => post.category === 'post');
+    const rawMessages = observations.map(({ system, ...msg }) => ({
       ...msg,
       ...(isSystemMessage(msg.author, msg.message, knownAuthors) && { system: true as const }),
     }));
     const { manifest, latestDayMessages } = generateChunks(displayMessages, path.join(groupDir, 'chunks'));
     const lastMessage = messages[messages.length - 1];
     const lastUpdated = lastMessage ? new Date(lastMessage.date) : new Date();
-    generateHtml(name, latestDayMessages, manifest, messages.length, lastUpdated, path.join(groupDir, 'index.html'), dirs.length > 1);
-    groups.push({ name, slug: dir.name, messageCount: messages.length, lastMessageDate: lastMessage ? lastUpdated : undefined });
+    generateHtml(name, latestDayMessages, manifest, displayMessages.length, lastUpdated, path.join(groupDir, 'index.html'), dirs.length > 1,
+      { mode: 'reading', rawCount: observations.length, revision });
+    for (const [mode, filename, records] of [
+      ['records', 'records.html', rawMessages],
+      ['activity', 'activity.html', reconciled.posts.filter(post => post.category !== 'post')],
+      ['unresolved', 'unresolved.html', reconciled.posts.filter(post => post.unresolvedMedia)],
+    ] as const) {
+      const base = `${mode}-chunks/`;
+      const chunks = generateChunks([...records].sort((a, b) => +new Date(a.date) - +new Date(b.date)), path.join(groupDir, base));
+      chunks.manifest.chunkBase = base;
+      generateHtml(name, chunks.latestDayMessages, chunks.manifest, records.length, lastUpdated, path.join(groupDir, filename), dirs.length > 1,
+        { mode, rawCount: observations.length, revision });
+    }
+    generateProvenance(groupDir, name, reconciled, observations);
+    console.log(`${name}: ${displayMessages.length} posts, ${observations.length} preserved observations, ${reconciled.posts.filter(p => p.unresolvedMedia).length} unresolved media entries.`);
+    groups.push({ name, slug: dir.name, messageCount: displayMessages.length, lastMessageDate: lastMessage ? lastUpdated : undefined });
   }
   groups.sort((a, b) => (b.lastMessageDate?.getTime() ?? 0) - (a.lastMessageDate?.getTime() ?? 0));
   generateIndex(groups, path.join(outputDir, 'index.html'));

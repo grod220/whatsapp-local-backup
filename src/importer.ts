@@ -1,19 +1,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
-import { parseString } from 'whatsapp-chat-parser';
 import type { AttachmentManifest, MessageWithId } from './types.js';
 import { archiveSource } from './archive.js';
 import { mergeMessages } from './merge.js';
 import { isSafeFilename, parseMessages, sha256, writeAtomic, writeImmutable } from './storage.js';
 import { cleanUnicode, extractGroupName, isMacOSArtifact, isPathTraversal, isSystemMessage, slugify } from './utils.js';
+import { batchIdentity, parseTranscript, PARSER_VERSION, validateEvidence, GROUP_METADATA } from './evidence.js';
+import type { Evidence, ImportBatch, Observation, Decision } from './evidence.js';
+import { allObservations, validateReconciliation } from './reconciliation.js';
+import type { Reconciliation } from './reconciliation.js';
 
-export function loadGroup(groupDir: string): { messages: MessageWithId[]; manifest: AttachmentManifest; name: string } {
-  return readGroupFiles(groupDir, relative => fs.readFileSync(path.join(groupDir, relative)));
+export function loadGroup(groupDir: string): { messages: MessageWithId[]; manifest: AttachmentManifest; name: string; evidence?: Evidence; decisions?: Decision[]; reconciliation?: Reconciliation } {
+  return readGroupFiles(groupDir, relative => fs.readFileSync(path.join(groupDir, relative)), GROUP_METADATA.filter(name => fs.existsSync(path.join(groupDir, name))));
 }
 
 /** Validate the same messages and media whether read locally or from a backup snapshot. */
-export function readGroupFiles(groupDir: string, readFile: (relative: string) => Buffer): ReturnType<typeof loadGroup> {
+export function readGroupFiles(groupDir: string, readFile: (relative: string) => Buffer, available: readonly string[] = [], verifiedMedia?: ReadonlyMap<string, string>): ReturnType<typeof loadGroup> {
   const messages = parseMessages(JSON.parse(readFile('data.json').toString('utf8')), `${groupDir}/data.json`);
   const manifest = JSON.parse(readFile('manifest.json').toString('utf8')) as AttachmentManifest;
   const info = JSON.parse(readFile('group-info.json').toString('utf8'));
@@ -24,14 +27,29 @@ export function readGroupFiles(groupDir: string, readFile: (relative: string) =>
   const filenames = new Set<string>();
   for (const [hash, filename] of Object.entries(manifest.contentHashes)) {
     if (!/^[a-f0-9]{64}$/.test(hash) || !isSafeFilename(filename)) throw new Error(`Invalid attachment manifest: ${groupDir}`);
-    const bytes = readFile(`attachments/${filename}`);
-    if (sha256(bytes) !== hash) throw new Error(`Media integrity check failed: ${path.join(groupDir, 'attachments', filename)}`);
+    const relative = `attachments/${filename}`;
+    if (verifiedMedia) {
+      // The portable verifier has already checked these exact file bytes once.
+      // The proof binds both the requested path and hash, not just shared bytes.
+      if (verifiedMedia.get(relative) !== hash) throw new Error(`Verified media is missing: ${path.join(groupDir, relative)}`);
+    } else if (sha256(readFile(relative)) !== hash) throw new Error(`Media integrity check failed: ${path.join(groupDir, relative)}`);
     filenames.add(filename);
   }
   for (const msg of messages) {
     if (msg.attachment && !filenames.has(msg.attachment)) throw new Error(`Message attachment is absent from the manifest: ${msg.attachment}`);
   }
-  return { messages, manifest, name: info.name };
+  const evidence = available.includes('evidence.json') ? JSON.parse(readFile('evidence.json').toString('utf8')) as Evidence : undefined;
+  const decisions = available.includes('decisions.json') ? JSON.parse(readFile('decisions.json').toString('utf8')) as Decision[] : undefined;
+  const reconciliation = available.includes('reconciliation.json') ? JSON.parse(readFile('reconciliation.json').toString('utf8')) as Reconciliation : undefined;
+  if (evidence) {
+    validateEvidence(evidence);
+    for (const observation of allObservations([], evidence)) if (observation.attachment && !filenames.has(observation.attachment)) throw new Error(`Observation media is absent from manifest: ${observation.attachment}`);
+  }
+  if (decisions && (!Array.isArray(decisions) || decisions.some(d => !['link', 'separate'].includes(d.action) || !d.id || !d.reason || !d.left || !d.right))) throw new Error('Invalid reconciliation decisions');
+  // An interrupted import may leave a safely stale derived view. Rebuilding it
+  // is allowed, but missing observations in an up-to-date view are never allowed.
+  if (reconciliation && reconciliation.inputHash === sha256(JSON.stringify([messages, manifest, evidence ?? { version: 1, imports: [] }, decisions ?? []]))) validateReconciliation(reconciliation, allObservations(messages, evidence));
+  return { messages, manifest, name: info.name, ...(evidence && { evidence }), ...(decisions && { decisions }), ...(reconciliation && { reconciliation }) };
 }
 
 export function validateOutput(outputDir: string): void {
@@ -63,6 +81,9 @@ function resolveGroup(outputDir: string, name: string, explicitGroup?: string): 
 export interface ImportOptions {
   group?: string;
   daysFirst?: boolean;
+  timeZone?: string;
+  defaultTimeZone?: string;
+  evidenceOnly?: boolean;
 }
 
 export function importBackup(zipPath: string, outputDir: string, archiveDir: string, options: ImportOptions = {}): void {
@@ -74,6 +95,16 @@ export function importBackup(zipPath: string, outputDir: string, archiveDir: str
   const attachmentsDir = path.join(groupDir, 'attachments');
   const exists = fs.existsSync(groupDir);
   const previous = exists ? loadGroup(groupDir) : { messages: [], manifest: { contentHashes: {} }, name: groupName };
+  const evidence: Evidence = previous.evidence ?? { version: 1, imports: [] };
+  const previousBatch = evidence.imports.findLast(batch => batch.source === source.hash);
+  const timeZone = options.timeZone ?? previousBatch?.timeZone ?? options.defaultTimeZone;
+  if (!timeZone) throw new Error('Specify the export timezone with --timezone, or set timeZone in clemcast.config.json. The original ZIP is preserved.');
+  const daysFirst = options.daysFirst ?? previousBatch?.daysFirst ?? undefined;
+  const batchId = batchIdentity(source.hash, timeZone, daysFirst);
+  if (evidence.imports.some(batch => batch.id === batchId)) {
+    console.log(`${previous.name}: source already preserved with ${timeZone}; no new observations.`);
+    return;
+  }
   const contentHashes = new Map(Object.entries(previous.manifest.contentHashes));
   const entries = new AdmZip(source.filename).getEntries().filter(entry => !entry.isDirectory && !isMacOSArtifact(entry.entryName));
   for (const entry of entries) {
@@ -86,7 +117,7 @@ export function importBackup(zipPath: string, outputDir: string, archiveDir: str
   if (!chats.length) chats = entries.filter(entry => entry.entryName.toLowerCase().endsWith('.txt'));
   if (chats.length !== 1) throw new Error(`Expected one chat transcript; found ${chats.length}. Original ZIP preserved in sources/.`);
   const chat = chats[0]!;
-  const parsed = parseString(chat.getData().toString('utf8'), { parseAttachments: true, ...options });
+  const parsed = parseTranscript(chat.getData().toString('utf8'), timeZone, daysFirst);
   if (!parsed.length || parsed.some(msg => !Number.isFinite(msg.date.getTime()))) {
     throw new Error('No valid messages parsed. Original ZIP preserved; existing history was not replaced.');
   }
@@ -114,7 +145,9 @@ export function importBackup(zipPath: string, outputDir: string, archiveDir: str
   }
 
   let missingAttachments = 0;
-  const incoming: Omit<MessageWithId, 'id'>[] = parsed.map(msg => {
+  const occurrences = new Map<string, number>();
+  const observations: Observation[] = [];
+  const incoming: Omit<MessageWithId, 'id'>[] = parsed.map((msg, ordinal) => {
     const text = cleanUnicode(msg.message);
     const author = msg.author === null ? null : cleanUnicode(msg.author);
     const marker = text.match(/<attached: (.+?)>/);
@@ -124,15 +157,24 @@ export function importBackup(zipPath: string, outputDir: string, archiveDir: str
     let message = text;
     if (attachment && marker) message = text.replace(marker[0], '').trim();
     if (original && !attachment) missingAttachments++;
-    return {
+    const record = {
       date: msg.date, author, message,
       ...(attachment !== undefined && { attachment }),
       ...(original && !attachment && { missingAttachment: original }),
       ...(isSystemMessage(author, message, knownAuthors) && { system: true as const }),
       source: source.hash,
     };
+    const identity = JSON.stringify([msg.wallTime, msg.author, msg.message]);
+    const occurrence = (occurrences.get(identity) ?? 0) + 1;
+    occurrences.set(identity, occurrence);
+    observations.push({ ...record, id: `observation-${sha256(JSON.stringify([batchId, ordinal]))}`,
+      originKey: sha256(JSON.stringify([source.hash, identity, occurrence])), ordinal,
+      wallTime: msg.wallTime, rawMessage: msg.message, rawAuthor: msg.author });
+    return record;
   });
-  const messages = mergeMessages(previous.messages, incoming);
+  const messages = options.evidenceOnly ? previous.messages : mergeMessages(previous.messages, incoming);
+  const batch: ImportBatch = { id: batchId, source: source.hash, transcript: chat.entryName, parser: PARSER_VERSION,
+    timeZone, daysFirst: daysFirst ?? null, observations };
   // Initialize an empty group before media writes, so a failed first import is retryable.
   if (!exists) {
     fs.mkdirSync(attachmentsDir, { recursive: true });
@@ -143,7 +185,9 @@ export function importBackup(zipPath: string, outputDir: string, archiveDir: str
   for (const [filename, bytes] of pendingFiles) writeImmutable(path.join(attachmentsDir, filename), bytes);
   // Manifest first: a crash can leave extra media, but cannot leave new dangling references.
   writeAtomic(path.join(groupDir, 'manifest.json'), JSON.stringify({ contentHashes: Object.fromEntries(contentHashes) }, null, 2));
-  writeAtomic(path.join(groupDir, 'data.json'), JSON.stringify(messages, null, 2));
+  if (!options.evidenceOnly) writeAtomic(path.join(groupDir, 'data.json'), JSON.stringify(messages, null, 2));
+  writeAtomic(path.join(groupDir, 'evidence.json'), JSON.stringify({ version: 1, imports: [...evidence.imports, batch] } satisfies Evidence, null, 2));
   console.log(`${previous.name}: ${previous.messages.length} existing + ${messages.length - previous.messages.length} new = ${messages.length} messages; ${pendingFiles.size} new media files.`);
   if (missingAttachments) console.warn(`  ${missingAttachments} attachment(s) were named but absent from this export. Their references and original ZIP are preserved.`);
+  console.log(`  Preserved ${observations.length} source observations; source timezone ${timeZone}.`);
 }

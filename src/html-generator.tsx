@@ -3,6 +3,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { MessageWithId, ChunkManifest } from './types.js';
 import { writeAtomic } from './storage.js';
+import { DISPLAY_TIME_ZONE } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAT_CSS = fs.readFileSync(path.join(__dirname, 'styles/chat.css'), 'utf-8');
@@ -276,11 +277,12 @@ const LOADER_SCRIPT = `
   }
 
   function formatTime(date) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString([], { timeZone: manifest.timeZone || 'UTC', hour: '2-digit', minute: '2-digit' });
   }
 
   function formatDate(date) {
     return date.toLocaleDateString([], {
+      timeZone: manifest.timeZone || 'UTC',
       weekday: 'long',
       year: 'numeric',
       month: 'long',
@@ -327,6 +329,8 @@ const LOADER_SCRIPT = `
     html += '<div class="author" style="color: ' + authorColor(author) + '">' + escapeHtml(author) + '</div>';
     if (msg.attachment) html += renderAttachment(msg.attachment);
     if (msg.message) html += '<div class="text">' + escapeHtml(msg.message) + '</div>';
+    if (msg.unresolvedMedia) html += '<p class="media-missing">Media has not been recovered from the saved exports.</p>';
+    if (manifest.showSourceLinks && msg.observationIds) html += '<a class="source-link" href="provenance.html#' + escapeAttr(msg.id) + '">Inspect import records</a>';
     html += '<div class="time">' + formatTime(date) + '</div>';
     html += '</div></div>';
     return html;
@@ -357,12 +361,12 @@ const LOADER_SCRIPT = `
     // Add date separator for this chunk (it's a different day than what's already loaded)
     var firstMsgDate = new Date(messages[0].date);
     html += renderDateSeparator(firstMsgDate);
-    lastDateStr = firstMsgDate.toDateString();
+    lastDateStr = formatDate(firstMsgDate);
 
     for (var i = 0; i < messages.length; i++) {
       var msg = messages[i];
       var date = new Date(msg.date);
-      var dateStr = date.toDateString();
+      var dateStr = formatDate(date);
 
       if (dateStr !== lastDateStr) {
         html += renderDateSeparator(date);
@@ -411,7 +415,7 @@ const LOADER_SCRIPT = `
     var chunk = manifest.chunks[nextChunkIndex];
     var script = document.createElement('script');
     loadingScript = script;
-    script.src = 'chunks/' + chunk.filename;
+    script.src = (manifest.chunkBase || 'chunks/') + chunk.filename;
     script.onerror = function() {
       if (loadingScript !== script) return;
       failChunk();
@@ -478,11 +482,12 @@ function authorColor(name: string): string {
 }
 
 function formatTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleTimeString([], { timeZone: DISPLAY_TIME_ZONE, hour: '2-digit', minute: '2-digit' });
 }
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString([], {
+    timeZone: DISPLAY_TIME_ZONE,
     weekday: 'long',
     year: 'numeric',
     month: 'long',
@@ -514,7 +519,7 @@ function Attachment({ filename, eager }: { filename: string; eager?: boolean | u
   return <div class="attachment"><a class="attachment-link" href={filePath}>📎 {filename}</a></div>;
 }
 
-function Message({ msg, eager }: { msg: MessageWithId; eager?: boolean | undefined }) {
+function Message({ msg, eager, showSourceLinks = false }: { msg: MessageWithId & { observationIds?: string[]; unresolvedMedia?: true }; eager?: boolean | undefined; showSourceLinks?: boolean }) {
   const date = new Date(msg.date);
 
   if (msg.system) {
@@ -535,6 +540,8 @@ function Message({ msg, eager }: { msg: MessageWithId; eager?: boolean | undefin
         <div class="author" style={{ color: authorColor(author) }}>{author}</div>
         {msg.attachment && <Attachment filename={msg.attachment} eager={eager} />}
         {msg.message && <div class="text">{msg.message}</div>}
+        {msg.unresolvedMedia && <p class="media-missing">Media has not been recovered from the saved exports.</p>}
+        {showSourceLinks && msg.observationIds && <a class="source-link" href={`provenance.html#${msg.id}`}>Inspect import records</a>}
         <div class="time">{formatTime(date)}</div>
       </div>
     </div>
@@ -549,6 +556,8 @@ function DateSeparator({ date }: { date: Date }) {
   );
 }
 
+export interface ViewerOptions { mode: 'reading' | 'records' | 'activity' | 'unresolved'; rawCount: number; revision?: string }
+
 function ChatViewer({
   groupName,
   messages,
@@ -556,6 +565,7 @@ function ChatViewer({
   totalMessages,
   lastUpdated,
   showBackLink,
+  options,
 }: {
   groupName: string;
   messages: MessageWithId[];
@@ -563,6 +573,7 @@ function ChatViewer({
   totalMessages: number;
   lastUpdated: Date;
   showBackLink: boolean;
+  options?: ViewerOptions;
 }) {
   let lastDateStr = '';
 
@@ -570,7 +581,9 @@ function ChatViewer({
 
   // Embed manifest for the loader script
   // Escape < to prevent </script> injection via malicious filenames
-  const manifestScript = `window.__CHUNK_MANIFEST__ = ${JSON.stringify(manifest).replace(/</g, '\\u003c')};`;
+  const showSourceLinks = options?.mode === 'activity' || options?.mode === 'unresolved';
+  const viewerManifest = { ...manifest, showSourceLinks };
+  const manifestScript = `window.__CHUNK_MANIFEST__ = ${JSON.stringify(viewerManifest).replace(/</g, '\\u003c')};`;
 
   // Format last updated date
   const lastUpdatedStr = lastUpdated.toLocaleDateString([], {
@@ -584,6 +597,7 @@ function ChatViewer({
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        {options?.revision && <meta name="archive-revision" content={options.revision} />}
         <title>{groupName}</title>
         <script>{THEME_INIT_SCRIPT}</script>
         <style>{CHAT_CSS}</style>
@@ -593,15 +607,26 @@ function ChatViewer({
       </head>
       <body>
         {showBackLink && <a class="back-link back-link-fixed" href="../index.html">←</a>}
+        <header class="mobile-archive">
+          <span>{groupName}</span>
+          <details><summary>Archive details</summary><nav aria-label="Mobile archive views">
+            <a href="index.html">Reading view</a>
+            <a href="activity.html">Group activity</a>
+            <a href="unresolved.html">Unresolved media</a>
+            <a href="records.html">All preserved records</a>
+            <a href="provenance.html">Import details</a>
+          </nav></details>
+        </header>
         <div class="layout">
           {/* Center column: messages */}
           <div class="messages-container">
             <div class="messages-inner">
               <div id="load-sentinel"></div>
               <div id="chunk-loader" class="chunk-loader">Loading messages...</div>
+              {filteredMessages.length === 0 && <p class="archive-empty">{options?.mode === 'unresolved' ? 'All media references have been resolved.' : 'No entries in this view.'}</p>}
               {filteredMessages.map((msg, index) => {
                 const date = new Date(msg.date);
-                const dateStr = date.toDateString();
+                const dateStr = formatDate(date);
                 const showSeparator = dateStr !== lastDateStr;
                 if (showSeparator) lastDateStr = dateStr;
 
@@ -611,7 +636,7 @@ function ChatViewer({
                 return (
                   <>
                     {showSeparator && <DateSeparator date={date} />}
-                    <Message msg={msg} eager={isEager} />
+                    <Message msg={msg} eager={isEager} showSourceLinks={showSourceLinks} />
                   </>
                 );
               })}
@@ -623,13 +648,22 @@ function ChatViewer({
             <div class="group-info-card">
               <h1>{groupName}</h1>
               <div class="group-meta">
-                <div>{totalMessages} messages</div>
+                <div>{totalMessages} {options?.mode === 'records' ? 'preserved records' : options?.mode === 'activity' ? 'group activity records' : options?.mode === 'unresolved' ? 'unresolved media entries' : 'posts'}</div>
                 <div>Updated {lastUpdatedStr}</div>
               </div>
               <div class="group-description">
                 Updates on the growth and adventures of baby Clement.
               </div>
             </div>
+            <nav class="archive-navigation" aria-label="Archive views">
+              <a href="index.html" aria-current={options?.mode === 'reading' ? 'page' : undefined}>Reading view</a>
+              <details><summary>Archive details</summary>
+                <a href="activity.html">Group activity</a>
+                <a href="unresolved.html">Unresolved media</a>
+                <a href="records.html">All preserved records{options ? ` (${options.rawCount})` : ''}</a>
+                <a href="provenance.html">Import details</a>
+              </details>
+            </nav>
             <div class="sidebar-actions">
               <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()">🌙</button>
             </div>
@@ -705,7 +739,8 @@ export function generateHtml(
   totalMessages: number,
   lastUpdated: Date,
   outputPath: string,
-  showBackLink: boolean = true
+  showBackLink: boolean = true,
+  options?: ViewerOptions
 ): void {
   const html = '<!DOCTYPE html>' + (
     <ChatViewer
@@ -715,6 +750,7 @@ export function generateHtml(
       totalMessages={totalMessages}
       lastUpdated={lastUpdated}
       showBackLink={showBackLink}
+      {...(options && { options })}
     />
   );
   writeAtomic(outputPath, html);

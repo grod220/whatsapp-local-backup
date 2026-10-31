@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { assertMessagesRetained, isSafeFilename, readMessages, sha256, writeAtomic, writeImmutable } from './storage.js';
+import { GROUP_METADATA, assertEvidenceRetained } from './evidence.js';
+import type { Evidence } from './evidence.js';
 
 export interface Snapshot {
   // v1 stored media objects too; v2 reuses the immutable media in output/.
@@ -40,7 +42,7 @@ export function parseSnapshot(data: Buffer, hash: string): Snapshot {
   for (const [relative, object] of Object.entries(snapshot.files)) {
     const parts = relative.split('/');
     if (!parts.every(isSafeFilename) || !(isMediaPath(relative)
-      || (parts.length === 2 && ['data.json', 'manifest.json', 'group-info.json'].includes(parts[1]!)))) {
+      || (parts.length === 2 && (GROUP_METADATA as readonly string[]).includes(parts[1]!)))) {
       throw new Error('Invalid snapshot path');
     }
     objectPath('', object);
@@ -87,6 +89,13 @@ export function verifyContinuity(outputDir: string, archiveDir: string): void {
     if (relative.endsWith('/data.json')) {
       const prior = JSON.parse(readObject(archiveDir, hash).toString('utf8'));
       assertMessagesRetained(prior, readMessages(filename));
+    } else if (relative.endsWith('/evidence.json')) {
+      assertEvidenceRetained(JSON.parse(readObject(archiveDir, hash).toString('utf8')) as Evidence,
+        JSON.parse(fs.readFileSync(filename, 'utf8')) as Evidence);
+    } else if (relative.endsWith('/decisions.json')) {
+      const prior = JSON.parse(readObject(archiveDir, hash).toString('utf8')) as unknown[];
+      const current = JSON.parse(fs.readFileSync(filename, 'utf8')) as unknown[];
+      if (JSON.stringify(current.slice(0, prior.length)) !== JSON.stringify(prior)) throw new Error('Reconciliation decision history was removed or changed');
     } else if (isMediaPath(relative)) readMedia(outputDir, relative, hash);
   }
 }
@@ -98,7 +107,7 @@ export function canonicalFiles(outputDir: string): string[] {
     if (group.isSymbolicLink()) throw new Error(`Unexpected symbolic link: ${group.name}`);
     if (!group.isDirectory()) continue;
     const dir = path.join(outputDir, group.name);
-    for (const name of ['data.json', 'group-info.json', 'manifest.json']) {
+    for (const name of GROUP_METADATA) {
       const filename = path.join(dir, name);
       if (fs.existsSync(filename)) files.push(`${group.name}/${name}`);
     }
@@ -164,6 +173,7 @@ export function archiveSource(zipPath: string, archiveDir: string): { hash: stri
   const legacy = path.join(archiveDir, 'sources', `${hash}.zip`);
   const filename = fs.existsSync(legacy) ? legacy : path.join(sourcesDirectory(archiveDir), `${hash}.zip`);
   writeImmutable(filename, bytes);
+  if (path.resolve(zipPath) === path.resolve(filename) && sourceInventory(archiveDir).some(source => source.sha256 === hash)) return { hash, filename };
   const receipt = JSON.stringify({ sha256: hash, originalName: path.basename(zipPath) }, null, 2);
   writeImmutable(path.join(archiveDir, 'receipts', `${sha256(receipt)}.json`), receipt);
   return { hash, filename };

@@ -11,9 +11,13 @@
     "verify-backup": "tsx scripts/verify-backup.ts",
     "compact-archive": "tsx scripts/compact-archive.ts",
     "restore": "tsx scripts/restore.ts",
+    "recover": "tsx scripts/recover-backup.ts",
+    "reconcile": "tsx scripts/reconcile.ts",
+    "migrate": "tsx scripts/migrate-reconciliation.ts",
     "deploy": "tsx scripts/deploy-if-changed.ts",
     "test": "tsx --test tests/*.test.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "audit": "tsx scripts/audit.ts"
   },
   "keywords": [],
   "author": "",

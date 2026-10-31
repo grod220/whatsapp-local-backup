@@ -5,10 +5,12 @@ import { importBackup, validateOutput, type ImportOptions } from './importer.js'
 import { renderOutput } from './render.js';
 import { withBackupLock } from './storage.js';
 import { discoverWhatsAppZips, getDownloadsPath, getDesktopPath, generateOutputZipPath } from './discovery.js';
-import { createOutputZip } from './zip-output.js';
+import { createRecoveryZip } from './zip-output.js';
 
 function run(): void {
-  const options: ImportOptions = {};
+  const configPath = path.resolve('clemcast.config.json');
+  const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+  const options: ImportOptions = { ...(config.timeZone && { defaultTimeZone: config.timeZone }) };
   let backupPath: string | undefined;
   const paths: string[] = [];
   const args = process.argv.slice(2);
@@ -23,6 +25,11 @@ function run(): void {
       if (!backupPath) throw new Error('--backup-to requires a new ZIP file path');
     } else if (arg === '--days-first') options.daysFirst = true;
     else if (arg === '--months-first') options.daysFirst = false;
+    else if (arg === '--timezone') {
+      const timeZone = args[++i];
+      if (!timeZone) throw new Error('--timezone requires an IANA timezone, such as Europe/Rome');
+      options.timeZone = timeZone;
+    }
     else if (arg.startsWith('--')) throw new Error(`Unknown option: ${arg}`);
     else paths.push(arg);
   }
@@ -50,9 +57,10 @@ function run(): void {
     if (failed) throw new Error(`${failed} import(s) failed. Retained data was not deleted. Resolve the failures and rerun; successful imports are safe to repeat.`);
     validateOutput(outputDir);
     renderOutput(outputDir);
+    captureSnapshot(outputDir, archiveDir);
     const zipPath = backupPath ? path.resolve(backupPath) : generateOutputZipPath(getDesktopPath());
-    createOutputZip(outputDir, zipPath, archiveDir);
-    console.log(`Created cumulative backup: ${zipPath}`);
+    createRecoveryZip(outputDir, zipPath, archiveDir);
+    console.log(`Created complete recovery backup: ${zipPath}`);
     console.log('Keep a copy of this ZIP on another disk or backup service.');
   });
 }

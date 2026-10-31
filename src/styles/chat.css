@@ -450,3 +450,21 @@ body::-webkit-scrollbar {
 .lightbox-close:hover {
   background: rgba(255, 255, 255, 0.3);
 }
+
+.archive-navigation { display: grid; gap: 12px; margin: 24px 0; font-size: 13px; line-height: 1.6; }
+.archive-navigation a { color: inherit; text-decoration: none; opacity: .7; }
+.archive-navigation a:hover, .archive-navigation a[aria-current="page"] { opacity: 1; text-decoration: underline; text-underline-offset: 3px; }
+.archive-navigation details a { display: block; margin-top: 10px; }
+.archive-navigation summary { cursor: pointer; }
+.source-link { display: inline-block; margin-top: 12px; color: inherit; opacity: .55; font-size: 11px; text-decoration: none; }
+.source-link:hover { opacity: 1; text-decoration: underline; }
+.media-missing { font-size: 12px; opacity: .75; border-left: 2px solid #b39045; padding-left: 12px; }
+.mobile-archive { display: none; }
+.archive-empty { padding: 40px 20px; color: var(--text-muted); }
+@media (max-width: 1100px) {
+  .mobile-archive { display: flex; align-items: center; justify-content: space-between; gap: 16px; position: sticky; top: 0; z-index: 10; padding: 14px 20px; background: var(--bg); border-bottom: 1px solid var(--border); font-size: 13px; }
+  .mobile-archive details { position: relative; }
+  .mobile-archive summary { cursor: pointer; }
+  .mobile-archive nav { position: absolute; right: 0; top: 30px; width: 190px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--card-bg); box-shadow: var(--shadow); }
+  .mobile-archive a { display: block; padding: 8px 0; color: var(--text); text-decoration: none; }
+}

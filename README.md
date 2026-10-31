@@ -1,124 +1,141 @@
 # Clemcast
 
-A growing WhatsApp archive across phones and exports. Every import adds to the history already on this computer. Earlier messages and media stay available when a newer export contains less history.
+A growing family archive assembled from overlapping WhatsApp exports. Original exports and source observations are preserved; a separate, reversible reconciliation produces the reading view.
 
-## Import and browse
+## Everyday use
+
+Requires Node.js 22 or newer.
 
 ```sh
-npm install
+npm ci
 npm run parse
+npm run preview
 ```
 
-This imports **all** matching WhatsApp export ZIPs in Downloads, including older copies of the same chat. To choose exports or a backup destination:
+`parse` finds matching WhatsApp ZIPs in Downloads, saves the original bytes, imports source observations, reconciles posts, rebuilds every view, verifies retained history, and creates a uniquely named **complete recovery backup** on the Desktop. Earlier exports, records, and media remain available when a newer export contains less history. Publishing remains a separate command.
+
+To select an export or backup destination:
 
 ```sh
-npm run parse -- "/path/to/WhatsApp Chat - Clemcast.zip"
-npm run parse -- --backup-to "/Volumes/Backup/clemcast-2026-09-10.zip" "/path/to/export.zip"
+npm run parse -- --backup-to /Volumes/Backup/clemcast-new.zip "/path/to/WhatsApp Chat - Clemcast.zip"
 ```
 
-Successful runs create a uniquely named cumulative ZIP on the Desktop by default. Existing backup ZIPs are never replaced. `npm run preview` opens the local viewer. Publishing is separate: `npm run deploy` verifies the collection before publishing `output/`.
+`clemcast.config.json` sets the default source and display timezone to `Europe/Rome`. An already imported ZIP reuses its recorded source timezone, even if the computer or default timezone changes. For an export made with a different phone timezone, specify it explicitly:
 
-## Publish to Cloudflare Pages
+```sh
+npm run parse -- --timezone Asia/Tokyo "/path/to/WhatsApp Chat - Clemcast.zip"
+```
 
-Use Node.js 22 or newer. `npm install` includes the project's local Wrangler CLI; a global installation is not needed. Authenticate with Cloudflare once, then deploy:
+Original wall clocks, parser versions, date-order choices, and interpreted instants are retained. Ambiguous/nonexistent DST times stop parsing rather than silently choosing an interpretation. Use the appropriate fixed-offset timezone for such an export. `--days-first` and `--months-first` resolve ambiguous date order. No source timestamp is inferred from the computer's timezone.
+
+An identical ZIP with the same parsing settings adds no observations. A changed parsing interpretation is retained as a new batch, linked back to the same original records where their identities agree.
+
+## Preservation and reconciliation
+
+The project's terms are defined in [CONTEXT.md](CONTEXT.md).
+
+- `sources/` stores exact original ZIPs by SHA-256, including failed imports. Legacy originals in `archive/sources/` remain supported.
+- `output/GROUP/data.json` preserves the cumulative legacy record index, including every pre-migration record and ID. It is deliberately not rewritten into a deduplicated database.
+- `output/GROUP/evidence.json` retains each source export's observations separately, including repeated identical entries, raw parsed bodies/authors, exported wall clocks, source record positions, parser version, and timezone interpretation. The exact original transcript remains inside its ZIP.
+- `output/GROUP/reconciliation.json` maps observations to stable post IDs and records the reason for each grouping. Every observation belongs to exactly one post, notice, or export artifact. Rebuilding is deterministic and preserves existing post IDs; merged IDs have retained aliases.
+- `output/GROUP/decisions.json` is an append-only record of reviewed links and separations. Later decisions for a pair supersede earlier ones without removing the history.
+- `output/GROUP/attachments/` retains every saved media file. A content hash identifies bytes, not a post: deliberately sending the same photo twice remains two posts.
+- `archive/objects/` and `archive/snapshots/` retain checksummed historical metadata, evidence, decisions and media inventories. Local metadata snapshots reference media in `output/`; they cannot repair missing media without a complete backup.
+
+Reconciliation matches exact content/author/media/instant across record streams while preserving occurrence counts within each export. One-second drift requires substantial content and independent matching anchors. Large legacy clock differences require at least three independent content anchors for the same record streams, offset and month. Missing-media entries can inherit an established clock alignment only when adjacent identified records already agree. Contact renames and changed text remain separate unless explicitly reviewed.
+
+A placeholder is linked to media only for a complete ordered sequence with equal counts and matching media types within the surrounding upload interval. Partial or ambiguous sequences remain unresolved. These are evidence-based interpretations; every automatic link records its rule and can be split if it is wrong.
+
+## Reading and inspection
+
+The default reading view shows reconciled posts. **Archive details** opens:
+
+- **Group activity** for notices and export headings.
+- **Unresolved media** for entries whose files have not been confidently identified.
+- **All preserved records** for every legacy and source observation.
+
+**Archive details → Import details** opens a maintenance page with original record IDs, source export hashes, timestamp/body variants, saved attachments, and grouping reasons. The normal reading view has no per-post inspection links. Group activity and unresolved-media views retain links for investigating individual entries. The inspection page works offline without a server.
+
+An “omitted” entry is not proof that another nearby saved file is the same attachment. Unresolved entries stay recoverable and visible until there is sufficient evidence. Checksums establish the integrity of saved data; they cannot establish that a phone export included everything that ever existed in WhatsApp.
+
+To correct a grouping, copy observation IDs from the inspection page:
+
+```sh
+npm run reconcile -- clemcast --separate OBSERVATION_A OBSERVATION_B --reason "Verified these are distinct messages"
+npm run reconcile -- clemcast --link OBSERVATION_A OBSERVATION_B --reason "Verified both appearances in the original exports"
+```
+
+A later link reverses an earlier separation for that pair, and vice versa. Conflicting transitive decisions are refused before the log is changed. Run `npm run backup` afterward, then publish. Every input record and earlier decision stays preserved.
+
+## Complete recovery backups
+
+```sh
+npm run backup
+npm run backup -- /Volumes/Backup/clemcast-new.zip
+npm run verify-backup -- /path/to/backup.zip
+```
+
+The default **v3 complete recovery ZIP** contains `output/`, all retained `archive/` history, every original ZIP in `sources/`, checksummed inventories, and the exact project tooling/configuration needed to resume importing. Originals missing locally prevent creating a complete backup. Existing backups are never replaced.
+
+Keep dated copies in the existing offsite Clemcast backup folder and retain earlier backups. Download a copy, verify it, and periodically recover into a new directory. A local snapshot alone is not an offsite backup. Imports and backups do not automatically upload to Drive.
+
+A smaller **v2 reader backup** remains available explicitly:
+
+```sh
+npm run backup -- --reader /path/to/reader-backup.zip
+```
+
+It includes the cumulative viewer, media and metadata history but excludes original ZIPs and tooling. Missing originals are reported. Earlier v2 backups remain readable and verifiable.
+
+Verification checks all stored SHA-256 values, follows every historical snapshot reference, validates observation/post coverage, checks original-export inventories, and requires all recovery dependencies. A checksum-consistent package that omits a required photo, original export, or snapshot fails verification.
+
+## Recover
+
+```sh
+npm run recover -- /path/to/complete-backup.zip /path/to/new-recovery-directory
+```
+
+Recovery verifies the package before extraction, creates a new directory, and checks recovered history, media and originals. Existing destinations are refused. For a v3 backup with tooling, run `npm ci` in the recovered directory, then `npm run audit` or `npm run preview`. To resume on another existing checkout, transfer `output/`, `archive/`, and `sources/` together. Git excludes all private archive directories.
+
+To inspect a historical snapshot in another new output directory:
+
+```sh
+npm run restore -- /path/to/recovered/archive /path/to/new-historical-output SNAPSHOT_HASH
+```
+
+The adjacent recovered `output/` supplies media. Both legacy v1 and current v2 snapshots are supported. Earlier legacy snapshots may predate source observations and reconciliation. They preserve their original record sets.
+
+## Migration from the legacy record index
+
+Migration requires an already verified complete backup covering the current collection. Assign a timezone to each retained source explicitly; establish it from the original transcripts and independent matching posts before running:
+
+```sh
+npm run migrate -- clemcast /path/to/complete-before-migration.zip SOURCE_SHA256=Europe/Rome OTHER_SOURCE_SHA256=Asia/Tokyo
+```
+
+Migration retains legacy `data.json` bytes exactly, preserves all existing attachment references, adds source evidence, and builds reconciliation. Create a new complete backup after migration. No migration deletes legacy records or media.
+
+## Publish
 
 ```sh
 npx wrangler login
 npm run deploy
 ```
 
-The default Pages project is `clemcast`; set `DEPLOY_PROJECT` to use another project. Unchanged output skips deployment. A failed deployment leaves the saved deploy hash unchanged, so retrying will still publish the pending changes. If dependencies were installed without development tools, run `npm install --include=dev` first.
+The project's local Wrangler CLI publishes `output/` to the `clemcast` Pages project; `DEPLOY_PROJECT` can override the project. Deployment checks archive continuity, every generated reading/raw/activity/unresolved day file, and the source inspection links. A stale or incomplete rebuild blocks publication. Unchanged output skips deployment; a failed deployment leaves the saved deployment hash unchanged.
 
-## Storage and retention
-
-- **`output/`** is the cumulative message database, media collection, and offline viewer. Imports preserve every existing record, ID, and media file. Matching media is reused by content hash; different bytes with the same exported filename are retained separately.
-- **`archive/objects/`** stores small historical versions of messages and metadata. New snapshots do **not** copy media into this directory.
-- **`archive/snapshots/`** records the files and SHA-256 hashes belonging to each historical snapshot. `archive/latest.json` selects the latest one. Every historical media reference is checked before making a portable backup, including unreferenced attachments.
-- **`sources/`** preserves exact original WhatsApp ZIPs by SHA-256, including exports that fail to parse. `archive/receipts/` records their original filenames. Legacy originals already in `archive/sources/` are also retained.
-
-Old full-object archives from the earlier format remain readable. Their duplicate local media is only removed by the explicit compaction command after a verified offsite backup is available. Unknown objects, metadata, snapshots, and original exports are never removed by compaction.
-
-Import safety includes complete-file atomic writes, a single-process lock, verification of media hashes, and checks that existing records have not shrunk or changed. An unreadable or shortened history stops the import. No import cleans up old media or deduplicates existing records away.
-
-### Matching across phones
-
-Messages are matched by full timestamp, author, text, attachment, and occurrence count. Repeated identical messages in one export survive. Indistinguishable records across exports use the greatest observed occurrence count; the original ZIPs remain available separately. Changed timestamp precision, contact names, or timezone can produce extra displayed copies. WhatsApp exports do not supply reliable cross-device IDs, so uncertain matches are kept conservatively.
-
-Unresolved media references and apparent parsing artifacts are retained. A warning identifies files named in the transcript but absent from the export. Exporting again with media may supply them. The parser interprets dates in the computer's local timezone; `--days-first` and `--months-first` select ambiguous date order. Original transcript bytes remain in `sources/`.
-
-## Portable backup format (v2)
-
-```sh
-npm run backup
-npm run backup -- "/Volumes/Backup/clemcast-2026-09-10.zip"
-npm run verify-backup -- "/path/to/backup.zip"
-```
-
-A v2 ZIP contains:
-
-- `output/`, including the offline viewer and each media file once.
-- `archive/`, including all retained message/metadata history, snapshot inventories, and source receipts. Duplicate media objects and raw source ZIPs are excluded.
-- `backup.json`, a versioned checksum inventory, list of separate source exports, and any originals missing locally when the backup was created.
-- `README.txt`, with recovery instructions.
-
-Unzip and open `output/index.html` in a browser. Reading the current collection requires no server or project installation. The ZIP preserves the cumulative viewer and its snapshot history. **Original WhatsApp ZIPs are separate**: save each file in `sources/` to offsite storage once, for example a `RawSources` subfolder beside the dated cumulative backups. Including overlapping originals in every cumulative ZIP would repeatedly duplicate their media. `backup.json` records which originals belong to the archive, but does not contain their bytes.
-
-Before saving a new ZIP, the backup command checks the bytes of every recorded original export found in `sources/` or legacy `archive/sources/`. A damaged original stops packaging. Missing originals produce a warning and are recorded in `backup.json`; the cumulative messages and media can still be backed up, including after recovery on a new computer without the separate originals. Recover missing originals from your source backup. Only originals that actually passed their checksum check are reported as retained locally.
-
-`verify-backup` checks every stored checksum and follows every snapshot reference to its metadata and media. It also validates each snapshot's messages, group metadata, and attachment manifest, and checks that the latest output matches its snapshot. A checksum-consistent ZIP with a missing photo or recovery file fails verification. Snapshot references to hidden or temporary files are preserved in the ZIP. For older v2 ZIPs, `originalExports.missingAtCreation` is `null` because original-source availability was not checked at creation; verification of a cumulative ZIP cannot verify separately stored originals.
-
-If an older day fails to download in the viewer, an error and **Retry** button remain visible. Retry requests that same day; the viewer advances only after its messages have loaded. Reconnecting also retries a failed download when the older messages are in view.
-
-Imports and backups do not automatically upload anything to Google Drive. Keep dated cumulative ZIPs in Clement/Clemcast, retain previous backups, and verify a downloaded copy. Keep the original source collection separately. Git excludes all private data directories; cloning this repository does not restore your conversations.
-
-## Restore
-
-For complete recovery or a new computer, unzip a cumulative backup and copy **both** its `output/` and `archive/` directories into this project before importing. Restore the separate original ZIPs into `sources/` when available. Move damaged working directories aside rather than overwriting the only remaining copies.
-
-To reconstruct a snapshot in a **new** directory with this project's tooling:
-
-```sh
-npm run restore -- "/path/to/unpacked/archive" recovered-output
-npm run restore -- "/path/to/unpacked/archive" recovered-old-output SNAPSHOT_HASH
-```
-
-The adjacent unpacked `output/` supplies the media. Both legacy v1 and current v2 snapshots are supported. Files and checksums are verified before the destination is created, and the viewer is regenerated. Existing restore destinations are never replaced.
-
-To repair local metadata using intact local media, `npm run restore` writes `restored-output/`. **Small local snapshots alone cannot repair missing or damaged media**: use a complete backup for that. To combine a local snapshot with media from a downloaded backup:
-
-```sh
-npm run restore -- archive recovered-output latest "/path/to/unpacked/output"
-```
-
-Historical snapshots are for inspection and recovery; imports enforce the latest cumulative history, so a smaller historical snapshot cannot silently replace the live collection. If reimporting a hash-named original ZIP, pass `--group clemcast` to identify its existing chat.
-
-## One-time removal of duplicate local media
-
-After creating the v2 backup, saving it offsite, downloading it, and verifying a full restore:
-
-```sh
-npm run compact-archive -- "/path/to/downloaded-backup.zip"
-```
-
-This checks the downloaded ZIP's stored bytes against **all current files and retained snapshots**. Only media objects already duplicated in `output/` and covered by that verified ZIP are removed. It does not remove metadata objects, original exports, snapshots, output files, or older portable backups. Compaction is explicit and safe to repeat; imports never invoke it automatically. The command verifies bytes but cannot establish where a file was downloaded from; the offsite upload/download step must happen first.
-
-## Renamed chats and interrupted operations
-
-Chat names choose groups; distinct names with colliding slugs get separate directories. To merge a renamed chat into an existing group:
-
-```sh
-npm run parse -- --group clemcast "/path/to/WhatsApp Chat - New Name.zip"
-```
-
-Exactly equal exported chat names cannot automatically distinguish unrelated conversations; rename one export to keep it separate. A trailing ` (1)`, ` (2)`, etc. is treated as a downloaded duplicate filename. When changing computers, transfer the full collection before deploying; deployment cannot discover another computer's unrelated history.
-
-If a process is killed, `.backup-lock/` may remain. Confirm the recorded PID in `.backup-lock/owner.json` has stopped before removing that lock directory and retrying. A failed import may leave additional source files or media retained; rerunning preserves previous records.
-
-## Validation
+## Validation and operations
 
 ```sh
 npm run check
 npm test
+npm run audit
 ```
 
-Tests cover additive imports, corrupt/missing history, duplicate messages, media collisions, source retention, atomic writes, locking, old and new snapshot restoration, standalone portable recovery, historical media coverage, and compaction refusing damaged or stale backups.
+Tests cover additive imports, source retention and replay, host-independent timezone interpretation and DST, occurrence-preserving reconciliation, deliberate photo resends, uncertain matches, reversible decisions, legacy recovery, complete recovery with originals, corruption/truncation detection, interrupted rebuilds, chunk retries, and backup compaction safeguards.
+
+Imports and backups use atomic complete-file writes and a single-process lock. An import refuses shortened/changed retained records or observations. If a killed process leaves `.backup-lock/`, confirm the PID in `owner.json` has stopped before removing that lock directory.
+
+Chat names choose groups. Download suffixes such as ` (1)` are treated as copies. To target an existing group after a chat rename, use `--group clemcast`; distinct chats with colliding slugs remain separate. Exactly equal exported chat names cannot establish that two unrelated conversations are the same.
+
+Old archives that copied media into `archive/objects/` remain readable. After saving a complete backup offsite, downloading it, and testing recovery, `npm run compact-archive -- /path/to/downloaded.zip` removes only media objects already duplicated in `output/` and covered by that verified backup. It retains all metadata, source ZIPs, snapshots, output media, unknown objects, and earlier backups. Imports never run compaction automatically.

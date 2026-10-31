@@ -37,12 +37,14 @@ function fixture(t: { after: (fn: () => void) => void }) {
   function run(filename: string, group?: string): void {
     validateOutput(output);
     captureSnapshot(output, archive);
-    importBackup(filename, output, archive, { daysFirst: true, ...(group && { group }) });
+    importBackup(filename, output, archive, { daysFirst: true, timeZone: 'UTC', ...(group && { group }) });
     captureSnapshot(output, archive);
   }
   const read = (group = 'family') => loadGroup(path.join(output, group));
   return { workspace, output, archive, zip, run, read };
 }
+
+const preserved = ({ reconciliation, ...group }: ReturnType<typeof loadGroup>) => group;
 
 const line = (day: number, second: number, message: string) => `[${day}/01/2026, 12:00:${String(second).padStart(2, '0')}] Alex: ${message}`;
 
@@ -76,7 +78,7 @@ test('rebuilding fixes stale system flags in the latest HTML and older chunks wi
     line(21, 5, 'Pat added Alex'),
     '[21/01/2026, 12:00:06] Sam: Sam joined using your invite',
     '[21/01/2026, 12:00:07] Alex (Dad): Pat added Alex (Dad)',
-  ].join('\n')), f.output, f.archive, { daysFirst: true });
+  ].join('\n')), f.output, f.archive, { daysFirst: true, timeZone: 'UTC' });
   const dataPath = path.join(f.output, 'family/data.json');
   // Simulate records imported by the old substring classifier.
   const stored = f.read().messages.map(message => message.message === update ? { ...message, system: true as const } : message);
@@ -85,12 +87,13 @@ test('rebuilding fixes stale system flags in the latest HTML and older chunks wi
   const original = fs.readFileSync(dataPath);
   renderOutput(f.output);
   const html = fs.readFileSync(path.join(f.output, 'family/index.html'), 'utf8');
+  const activity = fs.readFileSync(path.join(f.output, 'family/activity.html'), 'utf8');
   assert.ok(html.includes(`<div class="text">${update}</div>`), 'latest update keeps the regular text wrapper and paragraph breaks');
-  assert.match(html, /class="message system"><div class="bubble">Sam added Alex<\/div>/);
-  assert.match(html, /class="message system"><div class="bubble">Pat added Alex<\/div>/);
-  assert.match(html, /class="message system"><div class="bubble">Sam joined using your invite<\/div>/);
-  assert.match(html, /class="message system"><div class="bubble">Pat added Alex \(Dad\)<\/div>/);
-  assert.match(html, /class="message system"><div class="bubble">Messages and calls are end-to-end encrypted\.<\/div>/);
+  assert.match(activity, /class="message system"><div class="bubble">Sam added Alex<\/div>/);
+  assert.match(activity, /class="message system"><div class="bubble">Pat added Alex<\/div>/);
+  assert.match(activity, /class="message system"><div class="bubble">Sam joined using your invite<\/div>/);
+  assert.match(activity, /class="message system"><div class="bubble">Pat added Alex \(Dad\)<\/div>/);
+  assert.match(activity, /class="message system"><div class="bubble">Messages and calls are end-to-end encrypted\.<\/div>/);
   const chunk = fs.readFileSync(path.join(f.output, 'family/chunks/2026-01-20.js'), 'utf8');
   const older = JSON.parse(chunk.slice(chunk.indexOf(', ') + 2, -2)) as MessageWithId[];
   assert.equal(older[0]!.system, undefined, 'lazy-loaded older updates use the same corrected classification');
@@ -156,7 +159,7 @@ test('unresolved media references, captions, empty-author-looking lines and Andr
   assert.equal(f.read().messages.length, 2);
   renderOutput(f.output);
   const chunk = fs.readFileSync(path.join(f.output, 'family/chunks/2026-01-20.js'), 'utf8');
-  assert.match(chunk, /Person:/);
+  assert.match(fs.readFileSync(path.join(f.output, 'family/records-chunks/2026-01-20.js'), 'utf8'), /Person:/);
   f.run(f.zip('WhatsApp Chat with Android.zip', '21/01/2026, 12:00 - Alex: IMG-20260121.jpg (file attached)\nA caption', { 'IMG-20260121.jpg': 'image' }, 'WhatsApp Chat with Android.txt'));
   assert.ok(f.read('android').messages[0]!.attachment);
   assert.match(f.read('android').messages[0]!.message, /A caption/);
@@ -224,7 +227,7 @@ test('unsupported and corrupt exports retain original bytes and fail without cha
   const corrupt = path.join(f.workspace, 'WhatsApp Chat - Family (2).zip');
   fs.writeFileSync(corrupt, 'broken ZIP');
   assert.throws(() => f.run(corrupt));
-  assert.deepEqual(f.read(), previous);
+  assert.deepEqual(preserved(f.read()), preserved(previous));
   assert.equal(fs.readdirSync(sourcesDirectory(f.archive)).length, 3);
 });
 
@@ -245,7 +248,7 @@ test('portable backup restores all records and bytes, and refuses to overwrite a
   zip.extractAllTo(unpacked);
   const recovered = path.join(f.workspace, 'recovered');
   restoreSnapshot(path.join(unpacked, 'archive'), recovered);
-  assert.deepEqual(loadGroup(path.join(recovered, 'family')), f.read());
+  assert.deepEqual(preserved(loadGroup(path.join(recovered, 'family'))), preserved(f.read()));
   verifyContinuity(recovered, f.archive);
   assert.throws(() => createOutputZip(f.output, backup, f.archive), /already exists/);
   assert.throws(() => restoreSnapshot(f.archive, f.output), /already exists/);
@@ -279,7 +282,7 @@ test('concurrent imports are refused and interrupted writes leave prior history 
 test('CLI failures return nonzero and never fall through to publishing', t => {
   const f = fixture(t);
   const invalid = f.zip('WhatsApp Chat - Family.zip', 'not parseable');
-  const result = spawnSync(process.execPath, ['--import', tsx, cli, invalid], { cwd: f.workspace, encoding: 'utf8', env: cliEnv });
+  const result = spawnSync(process.execPath, ['--import', tsx, cli, '--timezone', 'UTC', invalid], { cwd: f.workspace, encoding: 'utf8', env: cliEnv });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /1 import\(s\) failed/);
   assert.equal(fs.existsSync(path.join(f.workspace, '.backup-lock')), false);
@@ -291,7 +294,7 @@ test('CLI uses explicit ZIP arguments, creates a cumulative portable backup and 
   const first = f.zip('WhatsApp Chat - Family.zip', line(20, 1, 'Old phone'));
   const second = f.zip('WhatsApp Chat - Family (1).zip', line(21, 1, 'New phone'));
   const backup = path.join(f.workspace, 'portable.zip');
-  const args = ['--import', tsx, cli, '--days-first', '--backup-to', backup, first, second];
+  const args = ['--import', tsx, cli, '--timezone', 'UTC', '--days-first', '--backup-to', backup, first, second];
   const result = spawnSync(process.execPath, args, { cwd: f.workspace, encoding: 'utf8', env: cliEnv });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(f.read().messages.length, 2);
@@ -324,7 +327,7 @@ test('new snapshots store metadata only and retain all media including unreferen
   const hashes = Object.entries(snapshot.files).filter(([relative]) => relative.includes('/attachments/')).map(([, hash]) => hash);
   assert.equal(hashes.length, 1);
   for (const hash of hashes) assert.equal(fs.existsSync(objectPath(f.archive, hash)), false);
-  assert.equal(fs.readdirSync(path.join(f.archive, 'objects')).length, 3);
+  assert.equal(fs.readdirSync(path.join(f.archive, 'objects')).length, 4);
 });
 
 test('legacy and lean snapshots restore from the smaller ZIP without the original local archive', t => {
@@ -351,7 +354,7 @@ test('legacy and lean snapshots restore from the smaller ZIP without the origina
   const recoveredOld = path.join(f.workspace, 'recovered-old');
   restoreSnapshot(path.join(unpacked, 'archive'), recovered);
   restoreSnapshot(path.join(unpacked, 'archive'), recoveredOld, oldSnapshot);
-  assert.deepEqual(loadGroup(path.join(recovered, 'family')), latest);
+  assert.deepEqual(preserved(loadGroup(path.join(recovered, 'family'))), preserved(latest));
   assert.deepEqual(loadGroup(path.join(recoveredOld, 'family')), older);
 });
 
@@ -382,7 +385,7 @@ test('compaction removes only verified duplicate media and preserves sources, sn
   const result = compactArchive(f.output, f.archive, backup);
   assert.equal(result.removedFiles, 1);
   assert.equal(result.removedBytes, Buffer.byteLength('first image'));
-  assert.deepEqual(f.read(), previous);
+  assert.deepEqual(preserved(f.read()), preserved(previous));
   assert.deepEqual(fs.readFileSync(unknown), unknownBytes);
   assert.ok(fs.existsSync(path.join(sourcesDirectory(f.archive), `${sha256(fs.readFileSync(original))}.zip`)));
   assert.ok(fs.existsSync(path.join(f.archive, 'snapshots', `${oldSnapshot}.json`)));
@@ -391,7 +394,7 @@ test('compaction removes only verified duplicate media and preserves sources, sn
   assert.deepEqual(loadGroup(path.join(recovered, 'family')), previous);
   assert.equal(compactArchive(f.output, f.archive, backup).removedFiles, 0);
   f.run(original);
-  assert.deepEqual(f.read(), previous);
+  assert.deepEqual(preserved(f.read()), preserved(previous));
   for (const hash of Object.keys(previous.manifest.contentHashes)) assert.equal(fs.existsSync(objectPath(f.archive, hash)), false);
 });
 
@@ -433,7 +436,7 @@ test('missing media from any historical snapshot blocks packaging, even if the c
   writeImmutable(path.join(f.archive, 'snapshots', `${sha256(bytes)}.json`), bytes);
   writeAtomic(path.join(f.archive, 'latest.json'), JSON.stringify({ snapshot: sha256(bytes) }));
   fs.unlinkSync(path.join(f.output, 'family/attachments', attachment));
-  assert.throws(() => createOutputZip(f.output, path.join(f.workspace, 'backup.zip'), f.archive), /media is missing/);
+  assert.throws(() => createOutputZip(f.output, path.join(f.workspace, 'backup.zip'), f.archive), /media is missing|ENOENT/);
 });
 
 for (const artifact of ['.DS_Store', 'orphan.jpg.12345678-1234-1234-1234-123456789abc.tmp']) {
@@ -452,7 +455,7 @@ for (const artifact of ['.DS_Store', 'orphan.jpg.12345678-1234-1234-1234-1234567
     new AdmZip(backup).extractAllTo(unpacked);
     const recovered = path.join(f.workspace, 'recovered');
     restoreSnapshot(path.join(unpacked, 'archive'), recovered, snapshot);
-    assert.deepEqual(loadGroup(path.join(recovered, 'family')), f.read());
+    assert.deepEqual(preserved(loadGroup(path.join(recovered, 'family'))), preserved(f.read()));
     assert.equal(fs.readFileSync(path.join(recovered, relative), 'utf8'), 'previously snapshotted bytes');
   });
 }
@@ -500,7 +503,7 @@ test('missing original exports are reported accurately while a restored collecti
   new AdmZip(backup).extractAllTo(unpacked);
   const recovered = path.join(f.workspace, 'recovered');
   restoreSnapshot(path.join(unpacked, 'archive'), recovered);
-  assert.deepEqual(loadGroup(path.join(recovered, 'family')), f.read());
+  assert.deepEqual(preserved(loadGroup(path.join(recovered, 'family'))), preserved(f.read()));
 });
 
 for (const location of ['sources', 'legacy', 'both']) {

@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { verifyContinuity } from '../src/archive.js';
 import { validateOutput } from '../src/importer.js';
 import { withBackupLock, writeAtomic } from '../src/storage.js';
+import { verifyViews } from '../src/verify-views.js';
 
 const outputDir = path.resolve('output');
 const cachePath = path.resolve('.deploy-hash');
@@ -31,6 +32,7 @@ function deploy(): void {
   if (!fs.existsSync(path.resolve('archive/latest.json'))) throw new Error('Run npm run backup before deploying so existing history has a recovery snapshot.');
   validateOutput(outputDir);
   verifyContinuity(outputDir, path.resolve('archive'));
+  verifyViews(outputDir);
 
   const files = listFiles(outputDir, outputDir).sort();
   const hash = crypto.createHash('sha256');

@@ -23,5 +23,8 @@ export interface ChunkInfo {
 
 export interface ChunkManifest {
   totalMessages: number;
+  chunkBase?: string;
+  showSourceLinks?: boolean;
+  timeZone?: string;
   chunks: ChunkInfo[];   // Ordered newest-first for easy loading
 }

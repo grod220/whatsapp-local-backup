@@ -1,18 +1,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import AdmZip from 'adm-zip';
-import { auditArchive, auditSources, canonicalFiles, isMediaPath, latestSnapshotHash, objectPath, parseSnapshot, parseSourceReceipt, readObject, readSnapshot, sourceInventory } from './archive.js';
-import { readGroupFiles } from './importer.js';
+import { auditArchive, auditSources, canonicalFiles, isMediaPath, latestSnapshotHash, objectPath, parseSnapshot, parseSourceReceipt, readObject, readSnapshot, sourceInventory, sourcesDirectory } from './archive.js';
+import { readGroupFiles, validateOutput } from './importer.js';
+import { captureSnapshot } from './archive.js';
 import { isSafeFilename, sha256, writeImmutable } from './storage.js';
+import { verifyViews } from './verify-views.js';
 
 interface PortableManifest {
   format: 'clemcast-portable';
-  version: 2;
+  version: 2 | 3;
   files: Record<string, string>;
-  sourcesIncluded: false;
+  sourcesIncluded: boolean;
   separateSources: Array<{ sha256: string; originalNames: string[] }>;
   // Absent in older v2 backups, whose original-source availability was not checked.
   missingSources?: string[];
+  toolingIncluded?: boolean;
 }
 
 const RECOVERY_README = `CLEMCAST BACKUP\n\nOpen output/index.html in a browser to read your chats offline.\n\nThis ZIP contains the cumulative messages and media, plus every retained\nmessage/metadata snapshot. Each media file is stored in output/ only.\nbackup.json contains SHA-256 checksums for every file in the ZIP.\n\nTo resume importing on another computer, copy both output/ and archive/\ninto the Clemcast project. Keep previous backups.\n\nTo restore a historical snapshot using the project:\n  npm run restore -- /path/to/unpacked/archive recovered-output SNAPSHOT_HASH\nThe adjacent unpacked output/ supplies the verified media. The restore\ncommand never replaces an existing directory.\n\nOriginal WhatsApp export ZIPs are stored separately in sources/ on the\noriginal computer. They are NOT included here. backup.json lists their\nhashes and original names; missingSources records originals missing locally\nwhen this backup was created. Older v2 backups did not check availability.\nSave each original export offsite once; keep\nthose originals for reparsing. This ZIP can restore the cumulative viewer\nand its history without the originals, but cannot recreate the source ZIPs.\n\nMetadata snapshots can repair message history using intact media. If media\nis lost or damaged locally, recover it from a complete offsite backup.\n`;
@@ -55,40 +59,80 @@ function portableFiles(outputDir: string, archiveDir: string): Map<string, strin
 
 /** Portable v2 keeps the browsable output and metadata history, with media stored once. */
 export function createOutputZip(sourceDir: string, outputPath: string, archiveDir: string): void {
+  createBackupZip(sourceDir, outputPath, archiveDir, false);
+}
+
+export function createRecoveryZip(sourceDir: string, outputPath: string, archiveDir: string): void {
+  createBackupZip(sourceDir, outputPath, archiveDir, true);
+}
+
+function createBackupZip(sourceDir: string, outputPath: string, archiveDir: string, includeSources: boolean): void {
   if (fs.existsSync(outputPath)) throw new Error(`Backup already exists: ${outputPath}`);
   for (const dir of [sourceDir, archiveDir]) {
     if (path.resolve(outputPath).startsWith(path.resolve(dir) + path.sep)) throw new Error('Save the backup outside output/ and archive/');
   }
   const originals = auditSources(archiveDir);
+  if (includeSources && originals.missing.length) throw new Error('Complete recovery backup requires every original export. Recover missing originals, or explicitly create a reader backup.');
   if (originals.missing.length) {
     console.warn(`Warning: ${originals.missing.length} original export ZIP(s) missing locally: ${originals.missing.join(', ')}. Recover them from your separate source backup. The cumulative backup still preserves the saved messages and media.`);
   }
   const zip = new AdmZip();
   const hashes: Record<string, string> = {};
+  validateOutput(sourceDir);
+  if (includeSources && fs.readdirSync(sourceDir).some(group => fs.existsSync(path.join(sourceDir, group, 'reconciliation.json')))) verifyViews(sourceDir);
+  captureSnapshot(sourceDir, archiveDir);
   for (const [relative, filename] of portableFiles(sourceDir, archiveDir)) {
     const bytes = fs.readFileSync(filename);
     hashes[relative] = sha256(bytes);
     zip.addFile(relative, bytes);
   }
-  hashes['README.txt'] = sha256(RECOVERY_README);
-  zip.addFile('README.txt', Buffer.from(RECOVERY_README));
+  if (includeSources) for (const source of originals.sources) {
+    const relative = `sources/${source.sha256}.zip`;
+    const current = path.join(sourcesDirectory(archiveDir), `${source.sha256}.zip`);
+    const filename = fs.existsSync(current) ? current : path.join(archiveDir, 'sources', `${source.sha256}.zip`);
+    const bytes = fs.readFileSync(filename);
+    hashes[relative] = sha256(bytes);
+    zip.addFile(relative, bytes);
+  }
+  if (includeSources) {
+    // Preserve the exact tooling that understands the evidence and decisions.
+    // A recovered directory is runnable after npm ci; no repository history or
+    // credentials are copied into the backup.
+    const project = fileURLToPath(new URL('..', import.meta.url));
+    const add = (relative: string): void => {
+      const filename = path.join(project, relative);
+      if (!fs.existsSync(filename)) return;
+      const entry = fs.lstatSync(filename);
+      if (entry.isDirectory()) { for (const child of fs.readdirSync(filename).sort()) add(`${relative}/${child}`); }
+      else if (entry.isFile()) { const bytes = fs.readFileSync(filename); hashes[relative] = sha256(bytes); zip.addFile(relative, bytes); }
+      else throw new Error(`Unexpected recovery tooling file: ${relative}`);
+    };
+    for (const relative of ['src', 'scripts', 'tests', 'package.json', 'package-lock.json', 'tsconfig.json', 'README.md', 'CONTEXT.md', 'clemcast.config.json', '.gitignore']) add(relative);
+    const settings = path.join(path.dirname(path.resolve(sourceDir)), 'clemcast.config.json');
+    if (fs.existsSync(settings)) { const bytes = fs.readFileSync(settings); hashes['clemcast.config.json'] = sha256(bytes); zip.addFile('clemcast.config.json', bytes); }
+  }
+  const readme = includeSources ? `CLEMCAST COMPLETE RECOVERY BACKUP (v3)\n\nThis backup includes output/, archive/, sources/ and the project tooling.\nPreserve the whole directory. Run npm ci, then npm run audit or npm run preview\nto verify and browse it. See README.md for importing and recovery instructions.\nOpen output/index.html directly to read offline without installing anything.\nOriginal ZIP bytes, source observations, reconciliation decisions and every\nretained snapshot/media are included. backup.json inventories SHA-256 checksums.\nRun npm run verify-backup -- FILE.zip and periodically recover into a new\ndirectory with npm run recover -- FILE.zip NEW_DIRECTORY.\n` : RECOVERY_README;
+  hashes['README.txt'] = sha256(readme);
+  zip.addFile('README.txt', Buffer.from(readme));
   const manifest: PortableManifest = {
-    format: 'clemcast-portable', version: 2, files: hashes,
-    sourcesIncluded: false, separateSources: originals.sources, missingSources: originals.missing,
+    format: 'clemcast-portable', version: includeSources ? 3 : 2, files: hashes,
+    sourcesIncluded: includeSources, separateSources: originals.sources, missingSources: originals.missing,
+    ...(includeSources && { toolingIncluded: true }),
   };
   zip.addFile('backup.json', Buffer.from(JSON.stringify(manifest, null, 2)));
   const bytes = zip.toBuffer();
   verifyZip(new AdmZip(bytes));
   writeImmutable(outputPath, bytes);
-  console.log(`Portable v2: media included once; ${originals.sources.length - originals.missing.length} original export ZIP(s) verified locally and retained separately; ${originals.missing.length} missing. Originals are not included in this ZIP.`);
+  console.log(includeSources ? `Complete recovery v3: ${originals.sources.length} original ZIPs included and verified, with all observations, decisions, snapshots and media.`
+    : `Reader backup v2: original exports retained separately; ${originals.missing.length} missing locally.`);
 }
 
 function verifyZip(zip: AdmZip): PortableManifest {
   const entry = zip.getEntry('backup.json');
   if (!entry) throw new Error('Not a versioned portable backup: backup.json is missing');
   const manifest = JSON.parse(entry.getData().toString('utf8')) as PortableManifest;
-  if (manifest.format !== 'clemcast-portable' || manifest.version !== 2 || !manifest.files
-    || typeof manifest.files !== 'object' || Array.isArray(manifest.files) || manifest.sourcesIncluded !== false
+  if (manifest.format !== 'clemcast-portable' || ![2, 3].includes(manifest.version) || !manifest.files
+    || typeof manifest.files !== 'object' || Array.isArray(manifest.files) || manifest.sourcesIncluded !== (manifest.version === 3)
     || !Array.isArray(manifest.separateSources)) {
     throw new Error('Unsupported portable backup format');
   }
@@ -107,12 +151,12 @@ function verifyZip(zip: AdmZip): PortableManifest {
 
 /** Independently follow recovery references; the ZIP's own inventory can be incomplete. */
 function verifyRecovery(zip: AdmZip, manifest: PortableManifest): void {
-  const read = (relative: string, hash?: string): Buffer => {
+  const reference = (relative: string, hash?: string): void => {
     const entry = zip.getEntry(relative);
     if (!entry || entry.isDirectory || !Object.hasOwn(manifest.files, relative)) throw new Error(`Backup recovery file is missing: ${relative}`);
     if (hash && manifest.files[relative] !== hash) throw new Error(`Backup recovery checksum mismatch: ${relative}`);
-    return entry.getData();
   };
+  const read = (relative: string, hash?: string): Buffer => { reference(relative, hash); return zip.getEntry(relative)!.getData(); };
   const latest: unknown = JSON.parse(read('archive/latest.json').toString('utf8')).snapshot;
   if (typeof latest !== 'string' || !/^[a-f0-9]{64}$/.test(latest)) throw new Error('Invalid latest snapshot in backup');
   // Require the pointer's target even when the supplied inventory omits it.
@@ -133,13 +177,22 @@ function verifyRecovery(zip: AdmZip, manifest: PortableManifest): void {
     };
     if (!Object.keys(snapshot.files).length) throw new Error('Empty recovery snapshot in backup');
     for (const relative of Object.keys(snapshot.files)) {
-      readSnapshotFile(relative);
+      if (isMediaPath(relative)) {
+        const expected = snapshot.files[relative]!;
+        const object = `archive/objects/${expected}`;
+        reference(zip.getEntry(object) ? object : `output/${relative}`, expected);
+      } else readSnapshotFile(relative);
       if (hash === latest && manifest.files[`output/${relative}`] !== snapshot.files[relative]) {
         throw new Error(`Latest output recovery file is missing or changed: ${relative}`);
       }
     }
     const groups = new Set(Object.keys(snapshot.files).map(relative => relative.split('/')[0]!));
-    for (const group of groups) readGroupFiles(`snapshot ${hash}/${group}`, relative => readSnapshotFile(`${group}/${relative}`));
+    for (const group of groups) {
+      const media = new Map(Object.entries(snapshot.files).filter(([relative]) => relative.startsWith(`${group}/attachments/`))
+        .map(([relative, hash]) => [relative.slice(group.length + 1), hash]));
+      readGroupFiles(`snapshot ${hash}/${group}`, relative => readSnapshotFile(`${group}/${relative}`),
+        Object.keys(snapshot.files).filter(name => name.startsWith(`${group}/`)).map(name => name.slice(group.length + 1)), media);
+    }
   }
   const sources = new Map<string, Set<string>>();
   for (const filename of Object.keys(manifest.files).filter(name => /^archive\/receipts\/[a-f0-9]{64}\.json$/.test(name))) {
@@ -150,6 +203,18 @@ function verifyRecovery(zip: AdmZip, manifest: PortableManifest): void {
   const inventory = [...sources].sort(([a], [b]) => a.localeCompare(b))
     .map(([sha256, names]) => ({ sha256, originalNames: [...names].sort() }));
   if (JSON.stringify(inventory) !== JSON.stringify(manifest.separateSources)) throw new Error('Backup source receipts do not match its source inventory');
+  if (manifest.sourcesIncluded) {
+    if (manifest.missingSources?.length) throw new Error('Complete backup has missing originals');
+    for (const source of inventory) if (sha256(read(`sources/${source.sha256}.zip`, source.sha256)) !== source.sha256) throw new Error('Damaged backup original');
+  }
+  if (manifest.toolingIncluded) {
+    for (const relative of ['package.json', 'package-lock.json', 'tsconfig.json', 'src/index.ts', 'src/reconciliation.ts', 'src/evidence.ts', 'scripts/recover-backup.ts']) read(relative);
+  }
+  const sourceHashes = new Set(inventory.map(s => s.sha256));
+  for (const filename of Object.keys(manifest.files).filter(name => /^output\/[^/]+\/evidence.json$/.test(name))) {
+    const evidence = JSON.parse(read(filename).toString('utf8'));
+    for (const batch of evidence.imports) if (!sourceHashes.has(batch.source)) throw new Error('Source evidence refers to an unrecorded original export');
+  }
   if (manifest.missingSources !== undefined && (!Array.isArray(manifest.missingSources)
     || new Set(manifest.missingSources).size !== manifest.missingSources.length
     || manifest.missingSources.some(hash => !sources.has(hash)))) throw new Error('Invalid missing source inventory');
@@ -158,6 +223,8 @@ function verifyRecovery(zip: AdmZip, manifest: PortableManifest): void {
 /** Verify bytes and recovery of every snapshot; optionally require all live history to be covered. */
 export function verifyPortableBackup(filename: string, outputDir?: string, archiveDir?: string): {
   sha256: string; bytes: number; files: number;
+  version: number;
+  sourcesIncluded: boolean;
   originalExports: { listed: number; missingAtCreation: number | null };
 } {
   const bytes = fs.readFileSync(filename);
@@ -170,6 +237,7 @@ export function verifyPortableBackup(filename: string, outputDir?: string, archi
   }
   return {
     sha256: sha256(bytes), bytes: bytes.length, files: Object.keys(manifest.files).length,
+    version: manifest.version, sourcesIncluded: manifest.sourcesIncluded,
     originalExports: { listed: manifest.separateSources.length, missingAtCreation: manifest.missingSources?.length ?? null },
   };
 }
