@@ -16,10 +16,10 @@ A growing family archive assembled from overlapping WhatsApp exports.
 
 **Recovery backup**: A verified collection containing the source exports, observations, reconciliation decisions, media, and history needed to recover the archive.
 
-**Backup object**: Immutable file bytes identified by SHA-256, stored once and shared across recovery points.
+**Retained file version**: Earlier file bytes identified by SHA-256. Durable recovery mappings reuse immutable sources/media or retain otherwise missing bytes in `archive/legacy-recovery/objects/`.
 
-**Backup snapshot**: A dated complete file inventory referencing backup objects. It is a recovery point, distinct from a metadata snapshot in `archive/snapshots/`.
+**Recovery history**: Checksummed file inventories and retained versions inside the complete ZIP, distinct from metadata snapshots in `archive/snapshots/`.
 
-**Current backup**: The verified backup snapshot referenced by `CURRENT.json`. Promotion requires retention checks, Drive checksum verification and a recovery proof.
+**Current backup**: The single dated `YYYY-MM-DD - Clemcast.zip` in the Google Drive folder named `Clemcast`. It directly contains the site output, original exports, history and tooling. Safe replacement requires retention checks and full Drive download verification before superseded containers move to recoverable Trash. Changed ZIPs upload in full; unchanged runs reuse the verified copy.
 
 **Legacy recovery history**: The verified file contents of older generated full backup ZIPs, including files absent from the current reader. Durable mappings in `archive/legacy-recovery/` keep this history recoverable from a standalone ZIP too.

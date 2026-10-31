@@ -11,6 +11,7 @@ export interface BackupStore {
   read(filename: string): Buffer;
   download(filenames: string[], destination: string): void;
   upload(source: string, filenames: string[], immutable: boolean): void;
+  move(source: string, destination: string): void;
   trash(filenames: string[]): void;
 }
 
@@ -28,7 +29,8 @@ export class DirectoryBackupStore implements BackupStore {
     return fs.readdirSync(dir, { withFileTypes: true }).map(entry => {
       if (!entry.isDirectory() && !entry.isFile()) throw new Error('Backup repository contains a non-regular file');
       const stat = fs.statSync(path.join(dir, entry.name));
-      return { name: entry.name, directory: entry.isDirectory(), size: stat.size, modifiedAt: stat.mtime.toISOString() };
+      return { name: entry.name, directory: entry.isDirectory(), size: stat.size, modifiedAt: stat.mtime.toISOString(),
+        ...(!entry.isDirectory() && { sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, entry.name))).digest('hex') }) };
     });
   }
   read(filename: string): Buffer { return fs.readFileSync(path.join(this.directory, safeRelative(filename))); }
@@ -40,6 +42,12 @@ export class DirectoryBackupStore implements BackupStore {
       const bytes = fs.readFileSync(path.join(source, safeRelative(name)));
       (immutable ? writeImmutable : writeAtomic)(path.join(this.directory, name), bytes);
     }
+  }
+  move(source: string, destination: string): void {
+    const target = path.join(this.directory, safeRelative(destination));
+    if (fs.existsSync(target)) throw new Error(`Backup destination already exists: ${destination}`);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.renameSync(path.join(this.directory, safeRelative(source)), target);
   }
   trash(filenames: string[]): void {
     for (const name of filenames) {
@@ -99,11 +107,19 @@ export class DriveBackupStore implements BackupStore {
       '--checksum', ...(immutable ? ['--immutable'] : []), '--transfers', '4', '--stats', '10s', '--stats-log-level', 'NOTICE', ...this.flags()], true));
     this.directories = new Set(['']);
   }
+  move(source: string, destination: string): void {
+    const parent = path.posix.dirname(destination) === '.' ? '' : path.posix.dirname(destination);
+    if (this.list(parent).some(file => file.name === path.posix.basename(destination))) throw new Error(`Backup destination already exists: ${destination}`);
+    runRclone(['moveto', this.remote(source), this.remote(destination), '--immutable', ...this.flags()], true);
+    this.directories = new Set(['']);
+  }
   trash(filenames: string[]): void {
     const files: string[] = [];
+    const parents = new Map<string, StoredFile[]>();
     for (const name of filenames) {
       const parent = path.posix.dirname(name) === '.' ? '' : path.posix.dirname(name);
-      const entry = this.list(parent).find(entry => entry.name === path.posix.basename(name));
+      if (!parents.has(parent)) parents.set(parent, this.list(parent));
+      const entry = parents.get(parent)!.find(entry => entry.name === path.posix.basename(name));
       if (!entry) continue;
       if (entry.directory) runRclone(['rmdir', this.remote(name), '--drive-use-trash=true', ...this.flags()], true);
       else files.push(name);

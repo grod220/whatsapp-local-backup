@@ -13,40 +13,43 @@ npm run parse
 
 Export the chat **with media** from WhatsApp and save the ZIP in Downloads. `npm run parse` performs the whole workflow:
 
-1. Preserve original ZIPs, import observations, reconcile posts, and rebuild the reader.
-2. Create and verify a complete local incremental checkpoint.
-3. Upload only file contents not already in the shared Google Drive backup store; verify every retained object against Drive checksums and download every new object to verify its bytes.
-4. Prove recovery and preservation of earlier data, then promote the dated snapshot to the current recovery point.
-5. Update the website, skipping unchanged output.
+1. Preserve the original export ZIPs, import observations, reconcile posts, and rebuild the reader.
+2. Create and verify a complete local recovery ZIP.
+3. Check that earlier records, original exports, media and recovery history survive in the replacement.
+4. Upload the ZIP, download it in full, and verify its SHA-256 and all recovery dependencies.
+5. Promote the dated ZIP, move superseded backup containers to recoverable Drive Trash, then update the website.
 
-An unchanged rerun uploads **zero data objects** and reuses its dated snapshot. Routine runs create no full recovery ZIP. Each unique file is stored once; exact original WhatsApp ZIPs are retained, so new exports can still contain overlapping media internally. Storage grows for new originals, new media and changed file versions, rather than another copy of the entire archive.
-
-A failure returns a nonzero status, retains the local checkpoint, and blocks website publication. Rerun the same command to retry. If Downloads contains no matching exports, `parse` backs up and publishes the existing archive. An empty project requires an export. Use `npm run preview` to browse locally.
+A failure returns a nonzero status, keeps a verified local ZIP, and blocks website publication. Rerun the same command to retry. If Downloads contains no matching exports, `parse` backs up and publishes the existing archive. An empty project requires an export. Use `npm run preview` to browse locally.
 
 ### Your Google Drive folder
 
-Use the existing **Clemcast — Backups** folder; its folder ID and sharing stay the same. It contains:
+The existing folder is named **Clemcast**, with the same folder ID and sharing. After a successful run it contains one file:
 
 ```text
-Clemcast — Backups/
-  START HERE - Clemcast backups.txt
-  Latest backup - 2026-10-31 10-30 - verified.txt
-  Backup data - keep this folder/
-    CURRENT.json
-    repository.json
-    snapshots/    (small dated complete file inventories)
-    objects/      (shared immutable file bytes)
+Clemcast/
+  2026-10-31 - Clemcast.zip
 ```
 
-Open **Latest backup** for the date, archive counts and recovery command. Keep **Backup data**: the text report is a guide, not a standalone backup. Dates shown in the report and filename use the configured display timezone; snapshot filenames contain UTC timestamps.
+The filename date uses the configured timezone (`Europe/Rome`). It identifies when that backup was created; an unchanged run keeps the existing name and uploads nothing. Download and unzip it normally:
 
-`CURRENT.json` is replaced only after the candidate passes all preservation checks and Drive readback. Previous dated snapshots and their shared bytes remain recoverable. Earlier messages, source observations, decisions, originals and media cannot disappear from the active archive. Existing unique bytes and historical recovery points are never pruned automatically.
+```text
+output/       Site pages, messages and saved photos/videos
+sources/      Exact original WhatsApp exports
+archive/      Metadata snapshots and earlier recovery history
+src/, scripts/, tests/, package.json, ...   Tools to continue the archive
+backup.json   Checksums and recovery inventory
+README.txt    Offline recovery instructions
+```
 
-On the first run, older full ZIPs and multipart packages in this folder are downloaded, checked and migrated file for file. Their exact original WhatsApp exports remain exact bytes. Only the generated backup containers are retired to **Drive Trash**, after the combined recovery point and every migrated payload pass verification and recovery proofs. Unknown files and changed legacy artifacts are refused, not deleted. Trash is never permanently emptied by this app.
+Open **output/index.html** to read the site without installing anything. Keep the whole unzipped directory for complete recovery. The site payload is directly in the ZIP, with its normal filenames.
 
-Migrated older files are also retained through durable references in `archive/legacy-recovery/`, reusing existing immutable media/source files where possible. This keeps manual standalone recovery ZIPs complete without copying current media into another local legacy tree.
+**Replacement is safe before it is tidy.** A new ZIP is uploaded under a temporary name while the old copy remains. The command downloads and verifies the entire candidate, proves the old file contents remain recoverable, and checks that the current records have not been shortened. Only then does it rename the candidate and move superseded copies to Trash. A failed run can leave extra temporary or previous ZIPs; a successful retry verifies them before cleanup. Unknown files or observed competing updates stop replacement. Use one publishing workspace at a time. The app never permanently empties Trash.
 
-The local repository is `.incremental-backup/repository/`; it and all archive data stay out of Git and the website. A verified local `LOCAL.json` checkpoint is written before Drive is contacted. One archive workspace should publish at a time; an observed competing Drive update stops promotion. Interrupted immutable uploads can be retried.
+Backups are incremental in what they preserve: unchanged media and originals are reused, and earlier changed file versions are retained through `archive/legacy-recovery/`. New generated backup ZIPs are never nested inside later ones. This avoids keeping another complete copy for every run. Exact WhatsApp export ZIPs are preserved unchanged, so overlapping original exports still take additional space. New records, originals, media and retained history naturally grow the archive.
+
+**A changed ordinary ZIP must be uploaded in full.** ZIP replacement is not an incremental network transfer. An unchanged run reuses the verified ZIP and checks Drive's SHA-256 without uploading another copy. Local generated ZIPs are cached under ignored `backups/automatic/`; after successful replacement only the current generated ZIP is kept there. User-created backups and original exports are never pruned.
+
+The former Drive object folder and guide files are migrated file for file into durable recovery history inside the ZIP before they move to Trash. Every old payload, including files absent from the current site, stays recoverable. Existing historical backup containers that were already present as file contents are retained exactly.
 
 ### One-time connections
 
@@ -63,13 +66,13 @@ The first Drive setup requires a dedicated Google **Desktop app** OAuth client; 
 
 The generated `backup-client.html` and `backup-privacy.html` pages describe the backup utility for Google's OAuth app configuration. They contain no archive records or credentials.
 
-To import and create a verified local incremental checkpoint while offline:
+To import and create a verified local recovery ZIP while offline:
 
 ```sh
 npm run parse -- --local-only
 ```
 
-To select an export and optionally also create a standalone recovery ZIP:
+To select an export and also save the complete ZIP to another disk:
 
 ```sh
 npm run parse -- --backup-to /Volumes/Backup/clemcast-new.zip "/path/to/WhatsApp Chat - Clemcast.zip"
@@ -120,7 +123,7 @@ npm run reconcile -- clemcast --separate OBSERVATION_A OBSERVATION_B --reason "V
 npm run reconcile -- clemcast --link OBSERVATION_A OBSERVATION_B --reason "Verified both appearances in the original exports"
 ```
 
-A later link reverses an earlier separation for that pair, and vice versa. Conflicting transitive decisions are refused before the log is changed. Run `npm run backup` afterward, then publish. Every input record and earlier decision stays preserved.
+A later link reverses an earlier separation for that pair, and vice versa. Conflicting transitive decisions are refused before the log is changed. Run `npm run parse` afterward to back up and publish. Every input record and earlier decision stays preserved.
 
 ## Complete recovery backups
 
@@ -132,7 +135,7 @@ npm run verify-backup -- /path/to/backup.zip
 
 The default **v3 complete recovery ZIP** contains `output/`, all retained `archive/` history, every original ZIP in `sources/`, checksummed inventories, and the exact project tooling/configuration needed to resume importing. Originals missing locally prevent creating a complete backup. Existing backups are never replaced.
 
-`npm run parse` uses the incremental Drive store by default. `npm run backup` explicitly creates a standalone local ZIP for occasional portability or another disk. It includes migrated legacy recovery history as well as the current archive. Existing ZIPs are never replaced. Periodically test recovery into a new directory.
+`npm run parse` creates the complete ZIP and safely replaces the Drive copy automatically. `npm run backup` creates an extra standalone local ZIP for another disk. Manual destination ZIPs are never overwritten. Periodically test recovery into a new directory.
 
 A smaller **v2 reader backup** remains available explicitly:
 
@@ -144,28 +147,23 @@ It includes the cumulative viewer, media and metadata history but excludes origi
 
 Verification checks all stored SHA-256 values, follows every historical snapshot reference, validates observation/post coverage, checks original-export inventories, and requires all recovery dependencies. A checksum-consistent package that omits a required photo, original export, or snapshot fails verification.
 
-## Recover from Drive or an incremental folder
+## Recover from Drive
+
+Download and unzip the dated ZIP directly, or use:
 
 ```sh
-npm run backup-history
 npm run recover-drive -- /path/to/new-clemcast-recovery
-npm run recover-drive -- /path/to/new-historical-recovery --snapshot DATED_SNAPSHOT_NAME.json
 ```
 
-Recovery downloads shared objects, verifies checksums and the complete recovery references, and creates a new directory only after verification. It retains historical objects and manifests beside the recovered current files. Existing destinations are refused. A recovered project needs `npm ci` and its own Google connection to resume automatic uploads.
+This downloads the current ZIP, verifies every checksum and recovery reference, and creates a new directory only after verification. Existing destinations are refused. Run `npm ci` in the recovered project, then `npm run audit` or `npm run preview`. A new computer needs its own Google and Cloudflare connections to resume automatic backups and publication.
 
-If you download the **entire** Clemcast Drive folder, keep its structure. Recover offline with:
+Older file sets retained inside the ZIP are listed locally by `npm run backup-history`. To restore one into a new directory after unzipping:
 
 ```sh
-npm run recover-incremental -- "/path/to/downloaded/Clemcast — Backups" /path/to/new-recovery
-npm run recover-incremental -- .incremental-backup/repository /path/to/new-local-recovery --local
+npm run recover-legacy -- /path/to/unpacked-project LEGACY_SNAPSHOT.json /path/to/new-legacy-files
 ```
 
-Older migrated containers are listed by `backup-history` with their original names. A standalone ZIP also includes their durable file inventories in `archive/legacy-recovery/snapshots/`; recover one after unpacking the ZIP with:
-
-```sh
-npm run recover-legacy -- /path/to/unpacked-project DATED_LEGACY_SNAPSHOT.json /path/to/new-legacy-files
-```
+`npm run recover-incremental` remains available only for compatibility with previously downloaded object-store backups. It is not the current Drive format.
 
 ## Recover a standalone ZIP
 

@@ -1,32 +1,41 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { prepareIncrementalBackup, publishIncrementalBackup } from './incremental.js';
+import { prepareZipBackup, publishZipBackup } from './zip-backup.js';
 import { DriveBackupStore, type BackupStore } from './backup-store.js';
 import { parseDriveConfig } from './drive-backup.js';
-import { createRecoveryZip, verifyPortableBackup } from './zip-output.js';
 import { deployOutput } from './deploy.js';
 import { writeAtomic } from './storage.js';
+import { verifyPortableBackup } from './zip-output.js';
 
-/** Caller holds the archive lock through import, verification, promotion and publication. */
+/** Caller holds the archive lock through import, verification, replacement and publication. */
 export function backupAndPublish(workspace: string, driveConfig: unknown, options: {
   localOnly?: boolean; fullZipPath?: string; timeZone?: string;
   store?: BackupStore; deploy?: (workspace: string) => void;
 } = {}): void {
-  const checkpoint = prepareIncrementalBackup(workspace);
-  if (options.fullZipPath) {
-    const destination = path.resolve(options.fullZipPath), output = path.join(workspace, 'output'), archive = path.join(workspace, 'archive');
-    if (fs.existsSync(destination)) { verifyPortableBackup(destination, output, archive); console.log(`Reusing verified recovery backup: ${destination}`); }
-    else createRecoveryZip(output, destination, archive);
-  }
-  if (options.localOnly) { console.log('Local incremental backup complete. Upload and website update skipped (--local-only).'); return; }
+  const checkpoint = prepareZipBackup(workspace);
   try {
+    if (options.localOnly) {
+      if (options.fullZipPath) copyZip(checkpoint.filename, options.fullZipPath, workspace);
+      console.log('Local recovery ZIP complete. Upload and website update skipped (--local-only).'); return;
+    }
     const config = parseDriveConfig(driveConfig);
-    const result = publishIncrementalBackup(checkpoint, options.store ?? new DriveBackupStore(config), options.timeZone);
+    const result = publishZipBackup(workspace, checkpoint, options.store ?? new DriveBackupStore(config), options.timeZone);
+    if (options.fullZipPath) copyZip(result.localZip, options.fullZipPath, workspace);
     (options.deploy ?? deployOutput)(workspace);
-    writeAtomic(path.join(workspace, '.incremental-backup', 'last-run.json'), JSON.stringify({ ...result,
+    writeAtomic(path.join(workspace, 'backups/automatic/publication.json'), JSON.stringify({ ...result,
       folderId: config.folderId, verifiedAt: new Date().toISOString(), published: true }, null, 2));
-    console.log(`Done: incremental Drive backup verified and website up to date.\nDrive folder: https://drive.google.com/drive/folders/${config.folderId}`);
+    console.log(`Done: Drive recovery ZIP verified and website up to date.\nDrive folder: https://drive.google.com/drive/folders/${config.folderId}`);
   } catch (error) {
-    throw new Error(`${error instanceof Error ? error.message : error}\nLocal incremental checkpoint is safe: ${checkpoint.directory}\nRun npm run parse again to retry.`, { cause: error });
+    throw new Error(`${error instanceof Error ? error.message : error}\nLocal recovery ZIP is safe in: ${path.dirname(checkpoint.filename)}\nRun npm run parse again to retry.`, { cause: error });
   }
+}
+function copyZip(source: string, destination: string, workspace: string): void {
+  const target = path.resolve(destination);
+  if (fs.existsSync(target)) {
+    verifyPortableBackup(target, path.join(workspace, 'output'), path.join(workspace, 'archive'));
+    console.log(`Reusing verified recovery backup: ${target}`); return;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+  console.log(`Saved extra recovery ZIP: ${target}`);
 }

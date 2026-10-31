@@ -45,7 +45,7 @@ test('incremental publication stores shared data once, dates snapshots and safel
   assert.deepEqual(second.snapshot, first.snapshot);
   assert.deepEqual(f.store.read(`${BACKUP_DATA}/snapshots/${head.snapshot.name}`), current);
   assert.equal(f.store.list(`${BACKUP_DATA}/snapshots`).length, 1);
-  assert.equal(f.store.list('').filter(file => file.name.startsWith('Latest backup - ')).length, 1);
+  assert.equal(f.store.list('').filter(file => /^Latest backup - .+ - verified\.txt$/.test(file.name)).length, 1);
   assert.match(head.snapshot.name, /^\d{4}-\d{2}-\d{2}T/);
   assert.ok(f.store.list('').some(file => file.name === 'START HERE - Clemcast backups.txt'));
   assert.ok(!fs.readdirSync(f.workspace).some(name => name.endsWith('.zip')), 'routine publication creates no complete ZIP');
@@ -80,13 +80,13 @@ test('failed uploads do not advance current or publish the website, and interrup
   class FailingStore extends DirectoryBackupStore {
     fail = true;
     override upload(source: string, names: string[], immutable: boolean) {
-      if (this.fail && names.some(name => name.includes('/objects/'))) { super.upload(source, names.slice(0, 1), immutable); throw new Error('Upload interrupted'); }
+      if (this.fail && names.some(name => name.endsWith('.zip'))) { super.upload(source, names.slice(0, 1), immutable); throw new Error('Upload interrupted'); }
       super.upload(source, names, immutable);
     }
   }
   const store = new FailingStore(f.remote); let publications = 0;
   const options = { store, deploy: () => { publications++; } }, config = { remote: 'clemcast', folderId: 'existing-folder' };
-  assert.throws(() => backupAndPublish(f.workspace, config, options), /Upload interrupted[\s\S]*Local incremental checkpoint is safe/);
+  assert.throws(() => backupAndPublish(f.workspace, config, options), /Upload interrupted[\s\S]*Local recovery ZIP is safe/);
   assert.ok(!fs.existsSync(path.join(f.remote, HEAD))); assert.equal(publications, 0);
   store.fail = false; backupAndPublish(f.workspace, config, options); assert.equal(publications, 1);
 });
@@ -227,7 +227,7 @@ test('parse CLI keeps an offline checkpoint when Drive is unavailable and safely
     path.join(project, 'src/index.ts'), ...(local ? ['--local-only'] : []), f.source],
   { cwd: f.workspace, encoding: 'utf8', env: { ...process.env, TSX_TSCONFIG_PATH: path.join(project, 'tsconfig.json') } });
   const before = loadGroup(path.join(f.output, 'family')), failed = run(); assert.equal(failed.status, 1);
-  assert.match(failed.stderr, /npm run setup-drive[\s\S]*Local incremental checkpoint is safe/);
+  assert.match(failed.stderr, /npm run setup-drive[\s\S]*Local recovery ZIP is safe/);
   assert.ok(!fs.existsSync(path.join(f.workspace, '.backup-lock')));
   assert.equal(run(true).status, 0); assert.deepEqual(loadGroup(path.join(f.output, 'family')), before);
 });
