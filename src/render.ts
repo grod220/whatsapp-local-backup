@@ -8,6 +8,7 @@ import { isSystemMessage } from './utils.js';
 import { allObservations, reconcileMessages, validateReconciliation } from './reconciliation.js';
 import { generateProvenance } from './provenance.js';
 import { DISPLAY_TIME_ZONE, VIEW_VERSION } from './settings.js';
+import { generateBackupClientPages } from './backup-client.js';
 
 /**
  * Groups messages by local day (YYYY-MM-DD) for chunked loading.
@@ -130,5 +131,6 @@ export function renderOutput(outputDir: string): void {
   }
   groups.sort((a, b) => (b.lastMessageDate?.getTime() ?? 0) - (a.lastMessageDate?.getTime() ?? 0));
   generateIndex(groups, path.join(outputDir, 'index.html'));
+  generateBackupClientPages(outputDir);
   console.log(`Generated viewers for ${groups.length} group(s).`);
 }

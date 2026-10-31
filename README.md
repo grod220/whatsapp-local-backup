@@ -35,6 +35,8 @@ The first Drive setup requires a dedicated Google **Desktop app** OAuth client; 
 
 `setup-drive` uses a browser Google sign-in. Google credentials live in `~/.config/clemcast/rclone.conf`, outside the repository and recovery ZIPs. Commands target only the folder ID in `clemcast.config.json`; OAuth's Drive scope itself grants broader Drive access. No automatic command deletes cloud backups. Reconnect only if Google revokes access; a recovered/new computer needs its own connections.
 
+The generated `backup-client.html` and `backup-privacy.html` pages describe the backup utility for Google's OAuth app configuration. They contain no archive records or credentials.
+
 To import and create a verified local backup while offline, without uploading or publishing:
 
 ```sh
