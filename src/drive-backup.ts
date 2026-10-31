@@ -45,23 +45,6 @@ export function checkDriveConnection(config: DriveBackupConfig, run = runRclone,
   if (root.IsDir !== true || (root.ID !== undefined && root.ID !== config.folderId)) throw new Error('Drive backup destination does not match the configured Clemcast folder. Website publication stopped.');
 }
 
-/** Copy a single immutable ZIP, then read its bytes back from Drive and hash them. */
-export function uploadRecoveryBackup(filename: string, sha256: string, config: DriveBackupConfig, run = runRclone): string {
-  if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('Invalid backup SHA-256');
-  checkDriveConnection(config, run);
-  const remotePath = `${config.remote}:clemcast-recovery-${sha256}.zip`;
-  const args = flags(config, driveCredentialsPath());
-  console.log('Copying the complete recovery ZIP to Google Drive...');
-  run(['copyto', filename, remotePath, '--immutable', '--checksum', '--stats', '10s', ...args], true);
-  const remote = JSON.parse(run(['lsjson', remotePath, '--stat', '--hash', ...args]));
-  if (remote.IsDir || remote.Size !== fs.statSync(filename).size || typeof remote.ID !== 'string') throw new Error('Drive backup size or file identity could not be verified. Website publication stopped.');
-  console.log('Reading the Drive backup back to verify every byte...');
-  const lines = run(['hashsum', 'sha256', remotePath, '--download', ...args]).trim().split(/\r?\n/);
-  if (lines.length !== 1 || lines[0]!.split(/\s+/)[0] !== sha256) throw new Error('Drive download checksum does not match the local recovery ZIP. Website publication stopped.');
-  console.log(`Google Drive backup verified: ${remote.ID}`);
-  return remote.ID;
-}
-
 /** Replace working credentials only after the new browser login is validated. */
 export function connectDrive(config: DriveBackupConfig, clientFile = path.join(path.dirname(driveCredentialsPath()), 'oauth-client.json')): void {
   if (!fs.existsSync(clientFile)) throw new Error('A dedicated Google Desktop OAuth client is required. Download its JSON from Google Cloud, then run npm run setup-drive -- /path/to/client.json. See README.md.');

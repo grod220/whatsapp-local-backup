@@ -5,7 +5,7 @@ import { importBackup, validateOutput, type ImportOptions } from './importer.js'
 import { renderOutput } from './render.js';
 import { withBackupLock } from './storage.js';
 import { discoverWhatsAppZips, getDownloadsPath } from './discovery.js';
-import { prepareRecoveryBackup, finishPublication } from './publication.js';
+import { backupAndPublish } from './publication.js';
 
 function run(): void {
   const configPath = path.resolve('clemcast.config.json');
@@ -61,9 +61,8 @@ function run(): void {
     validateOutput(outputDir);
     renderOutput(outputDir);
     captureSnapshot(outputDir, archiveDir);
-    const backup = prepareRecoveryBackup(process.cwd(), backupPath);
-    if (localOnly) console.log('Local backup complete. Upload and website update skipped (--local-only).');
-    else finishPublication(process.cwd(), backup, config.driveBackup);
+    backupAndPublish(process.cwd(), config.driveBackup, { localOnly,
+      ...(backupPath && { fullZipPath: backupPath }), ...(config.timeZone && { timeZone: config.timeZone }) });
   });
 }
 

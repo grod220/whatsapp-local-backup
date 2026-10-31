@@ -72,6 +72,12 @@ export function isSafeFilename(value: unknown): value is string {
     && !/[\\/\0]/.test(value);
 }
 
+/** Reserve a new destination atomically before publishing an already verified tree. */
+export function publishNewDirectory(temporary: string, destination: string): void {
+  fs.mkdirSync(destination, { mode: 0o700 }); // EEXIST protects even a concurrently created empty folder.
+  fs.renameSync(temporary, destination); // Replaces only the empty directory just reserved by this call.
+}
+
 export function readMessages(filename: string): MessageWithId[] {
   return parseMessages(JSON.parse(fs.readFileSync(filename, 'utf8')), filename);
 }

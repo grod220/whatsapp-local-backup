@@ -12,3 +12,4 @@ restored-output/
 backups/
 sources/
 .publish-state.json
+.incremental-backup/

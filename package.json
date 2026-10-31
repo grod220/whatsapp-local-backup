@@ -5,6 +5,10 @@
   "scripts": {
     "parse": "tsc --noEmit && tsx src/index.ts",
     "setup-drive": "tsx scripts/setup-drive.ts",
+    "recover-drive": "tsx scripts/recover-drive.ts",
+    "recover-incremental": "tsx scripts/recover-incremental.ts",
+    "backup-history": "tsx scripts/backup-history.ts",
+    "recover-legacy": "tsx scripts/recover-legacy.ts",
     "refresh-html": "tsx scripts/rebuild-output-html.ts",
     "preview": "npm run refresh-html && node scripts/serve-output.mjs",
     "local": "npm run preview",
