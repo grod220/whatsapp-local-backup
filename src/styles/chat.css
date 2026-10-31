@@ -384,7 +384,7 @@ body::-webkit-scrollbar {
 /* Compact reading-view albums. All originals remain individually addressable. */
 .album-heading, .album-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .album-heading { margin:8px 0 12px; font-size:13px; color:var(--text-muted); }
-.album-hint { font-size:12px; }
+.album-hint { font:inherit; font-size:12px; color:inherit; background:none; border:0; min-height:44px; padding:4px 0; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
 .album-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr)); aspect-ratio:4/3; gap:3px; border-radius:8px; overflow:hidden; background:var(--border); }
 .album-tile, .media-open { appearance:none; display:block; position:relative; width:100%; padding:0; border:0; cursor:pointer; color:inherit; background:var(--toggle-bg); overflow:hidden; font:inherit; touch-action:manipulation; }
 .album-tile { min-width:0; min-height:0; }
@@ -400,7 +400,7 @@ body::-webkit-scrollbar {
 .album-caption { margin-top:12px; }
 .album-caption button { font-size:12px; text-transform:capitalize; }
 .post-anchor { display:block; scroll-margin-top:70px; }
-.album-tile:focus-visible, .media-open:focus-visible, .album-view-all:focus-visible, .album-caption button:focus-visible { outline:3px solid #6d9666; outline-offset:-3px; }
+.album-hint:focus-visible, .album-tile:focus-visible, .media-open:focus-visible, .album-view-all:focus-visible, .album-caption button:focus-visible { outline:3px solid #6d9666; outline-offset:-3px; }
 .album-tile:active, .media-open:active { opacity:.85; }
 
 /* Native modal supplies keyboard focus containment and background inertness. */
