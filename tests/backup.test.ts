@@ -1,3 +1,4 @@
+import { renderReaderDay } from '../src/reader-runtime.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -544,7 +545,7 @@ for (const failure of ['network', 'empty response', 'missing callback', 'timeout
     const loader = element();
     const sentinel = { getBoundingClientRect: () => ({ top: 0, bottom: 1 }) };
     const window = {
-      innerHeight: 800, scrollY: 0, scrollTo() {},
+      innerHeight: 800, scrollY: 0, scrollTo() {}, __renderReaderDay: renderReaderDay,
       addEventListener(event: string, callback: () => void) { (listeners[event] ??= []).push(callback); },
       __CHUNK_MANIFEST__: JSON.parse(fs.readFileSync(path.join(f.output, 'family/chunks/manifest.json'), 'utf8')),
     };

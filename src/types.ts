@@ -26,5 +26,7 @@ export interface ChunkManifest {
   chunkBase?: string;
   showSourceLinks?: boolean;
   timeZone?: string;
+  albums?: import('./albums.js').Album[];
+  previews?: Record<string, import('./albums.js').Preview>;
   chunks: ChunkInfo[];   // Ordered newest-first for easy loading
 }

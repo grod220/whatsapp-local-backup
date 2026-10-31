@@ -106,7 +106,13 @@ A placeholder is linked to media only for a complete ordered sequence with equal
 
 ## Reading and inspection
 
-The default reading view shows reconciled posts. **Archive details** opens:
+The default reading view shows reconciled posts. Consecutive batches of **three or more saved photos/videos** from the same author appear as a compact four-thumbnail album. Batches are bounded to one minute from their first item and one display date; intervening text, a different sender, unsupported media, notices, and unresolved media split them. The written updates remain visible in their original timeline positions. Individual captions remain visible and available in the full-size gallery.
+
+Albums are presentation only: every post ID, observation, timestamp and original attachment remains preserved. The flat day files and all-preserved-records view still contain every individual record. Album membership is independently checked before backup and publication. The gallery supports touch swipes, previous/next buttons, keyboard navigation, Escape, browser Back, focus restoration, native video controls and opening the original file. Videos do not autoplay. Reading starts at the latest update; older days load as you scroll upward.
+
+Small video poster JPEGs are cached separately under `output/GROUP/previews/`. They are included in the site and complete ZIP, and never replace or alter originals. [FFmpeg](https://ffmpeg.org/) is optional for generating new posters (on macOS: `brew install ffmpeg`); without it, the reader uses native video previews. Existing posters work after recovery without FFmpeg. A damaged poster cache is rebuilt from the retained original media.
+
+ **Archive details** opens:
 
 - **Group activity** for notices and export headings.
 - **Unresolved media** for entries whose files have not been confidently identified.

@@ -5,6 +5,9 @@ import { allObservations, RECONCILIATION_VERSION, validateReconciliation } from 
 import { sha256, isSafeFilename } from './storage.js';
 import type { MessageWithId, ChunkManifest } from './types.js';
 import { VIEW_VERSION } from './settings.js';
+import { DISPLAY_TIME_ZONE } from './settings.js';
+import { findAlbums, mediaKind } from './albums.js';
+import { renderReaderDay } from './reader-runtime.js';
 
 /** Publishing checks the actual generated day files against preserved inputs. */
 export function verifyViews(outputDir: string): void {
@@ -27,6 +30,13 @@ export function verifyViews(outputDir: string): void {
       ['unresolved-chunks', state.posts.filter(p => p.unresolvedMedia)],
     ] as const) {
       const chunks = JSON.parse(fs.readFileSync(path.join(dir, folder, 'manifest.json'), 'utf8')) as ChunkManifest;
+      const albums = folder === 'chunks' ? findAlbums(state.posts, DISPLAY_TIME_ZONE) : [];
+      if (JSON.stringify(chunks.albums ?? []) !== JSON.stringify(albums)) throw new Error('Viewer album membership changed preserved post coverage');
+      for (const [name, preview] of Object.entries(chunks.previews ?? {})) {
+        const source = Object.entries(manifest.contentHashes).find(([, filename]) => filename === name)?.[0];
+        if (!source || mediaKind(name) !== 'video' || preview.file !== `previews/${source}.jpg`
+          || !/^[a-f0-9]{64}$/.test(preview.sha256) || sha256(fs.readFileSync(path.join(dir, preview.file))) !== preview.sha256) throw new Error('Video preview is missing or changed; rebuild the reading view');
+      }
       const actual: MessageWithId[] = [];
       for (const chunk of chunks.chunks) {
         if (!isSafeFilename(chunk.filename)) throw new Error('Invalid viewer chunk filename');
@@ -45,6 +55,13 @@ export function verifyViews(outputDir: string): void {
         // must still be identical to the immutable observation.
         if (!copy || copy.message !== record.message || copy.author !== record.author || copy.attachment !== record.attachment
           || String(copy.date) !== String(record.date)) throw new Error(`Viewer changed a preserved record: ${record.id}`);
+      }
+      const newest = chunks.chunks[0];
+      if (newest) {
+        const latest = actual.filter(message => new Intl.DateTimeFormat('en-CA', { timeZone: DISPLAY_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(message.date)) === newest.date);
+        const filename = folder === 'chunks' ? 'index.html' : `${folder.replace('-chunks', '')}.html`;
+        const sourceLinks = folder === 'activity-chunks' || folder === 'unresolved-chunks';
+        if (!fs.readFileSync(path.join(dir, filename), 'utf8').includes(renderReaderDay(latest, { ...chunks, showSourceLinks: sourceLinks }, true))) throw new Error('Viewer lost an initial post or album item');
       }
     }
     const provenance = fs.readFileSync(path.join(dir, 'provenance.html'), 'utf8');

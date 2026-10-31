@@ -9,6 +9,8 @@ import { allObservations, reconcileMessages, validateReconciliation } from './re
 import { generateProvenance } from './provenance.js';
 import { DISPLAY_TIME_ZONE, VIEW_VERSION } from './settings.js';
 import { generateBackupClientPages } from './backup-client.js';
+import { findAlbums, type ReaderAssets } from './albums.js';
+import { videoPreviews } from './media-previews.js';
 
 /**
  * Groups messages by local day (YYYY-MM-DD) for chunked loading.
@@ -40,7 +42,8 @@ function groupMessagesByDay(messages: MessageWithId[]): Map<string, MessageWithI
  */
 export function generateChunks(
   messages: MessageWithId[],
-  chunksDir: string
+  chunksDir: string,
+  assets: ReaderAssets = {},
 ): { manifest: ChunkManifest; latestDayMessages: MessageWithId[] } {
   fs.mkdirSync(chunksDir, { recursive: true });
 
@@ -79,6 +82,7 @@ export function generateChunks(
   chunks.reverse();
 
   const manifest: ChunkManifest = {
+    ...assets,
     totalMessages: messages.length,
     timeZone: DISPLAY_TIME_ZONE,
     chunks,
@@ -109,7 +113,9 @@ export function renderOutput(outputDir: string): void {
       ...msg,
       ...(isSystemMessage(msg.author, msg.message, knownAuthors) && { system: true as const }),
     }));
-    const { manifest, latestDayMessages } = generateChunks(displayMessages, path.join(groupDir, 'chunks'));
+    const previews = videoPreviews(groupDir, displayMessages, attachments);
+    const { manifest, latestDayMessages } = generateChunks(displayMessages, path.join(groupDir, 'chunks'),
+      { albums: findAlbums(reconciled.posts, DISPLAY_TIME_ZONE), previews });
     const lastMessage = messages[messages.length - 1];
     const lastUpdated = lastMessage ? new Date(lastMessage.date) : new Date();
     generateHtml(name, latestDayMessages, manifest, displayMessages.length, lastUpdated, path.join(groupDir, 'index.html'), dirs.length > 1,
@@ -120,7 +126,7 @@ export function renderOutput(outputDir: string): void {
       ['unresolved', 'unresolved.html', reconciled.posts.filter(post => post.unresolvedMedia)],
     ] as const) {
       const base = `${mode}-chunks/`;
-      const chunks = generateChunks([...records].sort((a, b) => +new Date(a.date) - +new Date(b.date)), path.join(groupDir, base));
+      const chunks = generateChunks([...records].sort((a, b) => +new Date(a.date) - +new Date(b.date)), path.join(groupDir, base), { previews });
       chunks.manifest.chunkBase = base;
       generateHtml(name, chunks.latestDayMessages, chunks.manifest, records.length, lastUpdated, path.join(groupDir, filename), dirs.length > 1,
         { mode, rawCount: observations.length, revision });

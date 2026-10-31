@@ -4,13 +4,15 @@ import { fileURLToPath } from 'url';
 import type { MessageWithId, ChunkManifest } from './types.js';
 import { writeAtomic } from './storage.js';
 import { DISPLAY_TIME_ZONE } from './settings.js';
+import ts from 'typescript';
+import { renderReaderDay } from './reader-runtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAT_CSS = fs.readFileSync(path.join(__dirname, 'styles/chat.css'), 'utf-8');
 const INDEX_CSS = fs.readFileSync(path.join(__dirname, 'styles/index.css'), 'utf-8');
 
 // This script MUST run before CSS to prevent flash of wrong theme
-const THEME_INIT_SCRIPT = `(function(){var t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');if(t==='dark')document.documentElement.setAttribute('data-theme','dark')})();`;
+const THEME_INIT_SCRIPT = `(function(){if('scrollRestoration' in history)history.scrollRestoration='manual';var t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');if(t==='dark')document.documentElement.setAttribute('data-theme','dark')})();`;
 
 const TOGGLE_SCRIPT = `
 window.toggleTheme = function() {
@@ -27,117 +29,11 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 `;
 
-const LIGHTBOX_SCRIPT = `
-(function() {
-  document.addEventListener('DOMContentLoaded', function() {
-    // Create lightbox elements using safe DOM methods
-    var lightbox = document.createElement('div');
-    lightbox.className = 'lightbox';
-
-    var closeBtn = document.createElement('button');
-    closeBtn.className = 'lightbox-close';
-    closeBtn.textContent = '×';
-
-    var content = document.createElement('div');
-    content.className = 'lightbox-content';
-
-    lightbox.appendChild(closeBtn);
-    lightbox.appendChild(content);
-    document.body.appendChild(lightbox);
-
-    var isClosing = false;
-    var hasLightboxHistoryEntry = false;
-
-    function closeLightbox(options) {
-      options = options || {};
-      if (isClosing) return;
-      isClosing = true;
-      // Pause any playing video
-      var video = content.querySelector('video');
-      if (video) video.pause();
-      lightbox.classList.remove('active');
-      // Wait for fade-out transition before clearing content
-      setTimeout(function() {
-        while (content.firstChild) content.removeChild(content.firstChild);
-        isClosing = false;
-      }, 120);
-
-      // Keep history clean: manual close removes the lightbox history entry.
-      if (!options.fromPopstate && hasLightboxHistoryEntry) {
-        hasLightboxHistoryEntry = false;
-        window.history.back();
-      } else if (options.fromPopstate) {
-        // Back button consumed the synthetic entry.
-        hasLightboxHistoryEntry = false;
-      }
-    }
-
-    // Close on clicking outside content or close button
-    lightbox.addEventListener('click', function(e) {
-      if (e.target === lightbox || e.target === closeBtn) {
-        closeLightbox();
-      }
-    });
-
-    // Close on escape key
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape' && lightbox.classList.contains('active')) {
-        closeLightbox();
-      }
-    });
-
-    // Event delegation: handle clicks on any attachment img/video (including dynamically added)
-    document.body.addEventListener('click', function(e) {
-      var el = e.target.closest('.attachment img, .attachment video, .attachment .video-thumb');
-      if (!el) return;
-
-      // If clicking the video-thumb wrapper, get the video inside
-      if (el.classList.contains('video-thumb')) {
-        el = el.querySelector('video');
-        if (!el) return;
-      }
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      // Pause any currently playing video in lightbox
-      var currentVideo = content.querySelector('video');
-      if (currentVideo) currentVideo.pause();
-
-      // Pause all videos on the page
-      document.querySelectorAll('.attachment video').forEach(function(v) {
-        v.pause();
-      });
-
-      var clone;
-      if (el.tagName === 'IMG') {
-        clone = document.createElement('img');
-        clone.src = el.src;
-      } else {
-        clone = document.createElement('video');
-        clone.src = el.src;
-        clone.controls = true;
-        clone.autoplay = true;
-      }
-      while (content.firstChild) content.removeChild(content.firstChild);
-      content.appendChild(clone);
-      if (!lightbox.classList.contains('active') && !hasLightboxHistoryEntry) {
-        window.history.pushState({ lightbox: true }, '', window.location.href);
-        hasLightboxHistoryEntry = true;
-      }
-      lightbox.classList.add('active');
-    });
-
-    window.addEventListener('popstate', function() {
-      if (lightbox.classList.contains('active')) {
-        closeLightbox({ fromPopstate: true });
-      } else {
-        hasLightboxHistoryEntry = false;
-      }
-    });
-  });
-})();
-`;
+const runtimeSource = fs.readFileSync(path.join(__dirname, 'reader-runtime.ts'), 'utf8');
+const compiledRuntime = ts.transpileModule(runtimeSource, { compilerOptions: {
+  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+} }).outputText.replace(/^export /gm, '');
+const READER_SCRIPT = `(function(){${compiledRuntime}\nwindow.__renderReaderDay = renderReaderDay; document.addEventListener('DOMContentLoaded', installReaderGallery);})();`;
 
 // This script handles lazy loading of older message chunks
 const LOADER_SCRIPT = `
@@ -147,8 +43,21 @@ const LOADER_SCRIPT = `
   var wasAtBottom = true;
   var supportsResizeObserver = typeof ResizeObserver !== 'undefined';
   var resizeObserver = null;
+  var positionedLatestDay = false;
 
   function scrollToBottom() {
+    if (document.querySelector && document.querySelector('dialog[open]')) return;
+    if (window.__CHUNK_MANIFEST__ && window.__CHUNK_MANIFEST__.startAtLatestDay && document.querySelectorAll) {
+      if (positionedLatestDay) return;
+      var dates = document.querySelectorAll('.messages-inner > .date-separator');
+      var latest = dates[dates.length - 1];
+      if (latest) {
+        var header = document.querySelector('.mobile-archive');
+        var offset = header ? header.getBoundingClientRect().height : 0;
+        window.scrollTo(0, window.scrollY + latest.getBoundingClientRect().top - offset);
+        positionedLatestDay = true; return;
+      }
+    }
     window.scrollTo(0, document.documentElement.scrollHeight);
   }
 
@@ -266,81 +175,8 @@ const LOADER_SCRIPT = `
     loader.appendChild(retry);
   }
 
-  // Author color function (same as server-side)
-  function authorColor(name) {
-    var hash = 0;
-    for (var i = 0; i < name.length; i++) {
-      hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    var hue = Math.abs(hash) % 360;
-    return 'hsl(' + hue + ', 65%, 45%)';
-  }
-
-  function formatTime(date) {
-    return date.toLocaleTimeString([], { timeZone: manifest.timeZone || 'UTC', hour: '2-digit', minute: '2-digit' });
-  }
-
-  function formatDate(date) {
-    return date.toLocaleDateString([], {
-      timeZone: manifest.timeZone || 'UTC',
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  }
-
-  function escapeHtml(text) {
-    var div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  function escapeAttr(text) {
-    return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  function renderAttachment(filename) {
-    var ext = filename.split('.').pop().toLowerCase();
-    var safePath = escapeAttr('attachments/' + filename);
-
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
-      return '<div class="attachment"><img src="' + safePath + '" loading="lazy" /></div>';
-    }
-    if (['mp4', 'mov', 'webm', '3gp'].includes(ext)) {
-      return '<div class="attachment"><div class="video-thumb"><video src="' + safePath + '"></video><div class="play-icon">▶</div></div></div>';
-    }
-    if (['mp3', 'ogg', 'opus', 'm4a', 'wav'].includes(ext)) {
-      return '<div class="attachment"><audio src="' + safePath + '" controls></audio></div>';
-    }
-    return '<div class="attachment"><a class="attachment-link" href="' + safePath + '">📎 ' + escapeHtml(filename) + '</a></div>';
-  }
-
-  function renderMessage(msg) {
-    var date = new Date(msg.date);
-
-    if (msg.system) {
-      var content = (msg.attachment ? renderAttachment(msg.attachment) : '') + escapeHtml(msg.message);
-      return '<div class="message system"><div class="bubble">' + content + '</div></div>';
-    }
-
-    var author = msg.author || 'Unknown';
-    var html = '<div class="message"><div class="bubble">';
-    html += '<div class="author" style="color: ' + authorColor(author) + '">' + escapeHtml(author) + '</div>';
-    if (msg.attachment) html += renderAttachment(msg.attachment);
-    if (msg.message) html += '<div class="text">' + escapeHtml(msg.message) + '</div>';
-    if (msg.unresolvedMedia) html += '<p class="media-missing">Media has not been recovered from the saved exports.</p>';
-    if (manifest.showSourceLinks && msg.observationIds) html += '<a class="source-link" href="provenance.html#' + escapeAttr(msg.id) + '">Inspect import records</a>';
-    html += '<div class="time">' + formatTime(date) + '</div>';
-    html += '</div></div>';
-    return html;
-  }
-
-  function renderDateSeparator(date) {
-    return '<div class="date-separator"><span>' + formatDate(date) + '</span></div>';
-  }
-
   function sentinelVisible() {
+    if (document.querySelector && document.querySelector('dialog[open]')) return false;
     var rect = sentinel.getBoundingClientRect();
     return rect.top < 1000 && rect.bottom > 0;
   }
@@ -354,26 +190,9 @@ const LOADER_SCRIPT = `
       return;
     }
 
-    // Build HTML for the chunk
-    var html = '';
-    var lastDateStr = '';
-
-    // Add date separator for this chunk (it's a different day than what's already loaded)
-    var firstMsgDate = new Date(messages[0].date);
-    html += renderDateSeparator(firstMsgDate);
-    lastDateStr = formatDate(firstMsgDate);
-
-    for (var i = 0; i < messages.length; i++) {
-      var msg = messages[i];
-      var date = new Date(msg.date);
-      var dateStr = formatDate(date);
-
-      if (dateStr !== lastDateStr) {
-        html += renderDateSeparator(date);
-        lastDateStr = dateStr;
-      }
-      html += renderMessage(msg);
-    }
+    var html;
+    try { html = window.__renderReaderDay(messages, manifest); }
+    catch (error) { failChunk(); return; }
 
     // Preserve scroll position while prepending
     var prevScrollHeight = document.body.scrollHeight;
@@ -472,90 +291,6 @@ const LOADER_SCRIPT = `
 })();
 `;
 
-function authorColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 65%, 45%)`;
-}
-
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString([], { timeZone: DISPLAY_TIME_ZONE, hour: '2-digit', minute: '2-digit' });
-}
-
-function formatDate(date: Date): string {
-  return date.toLocaleDateString([], {
-    timeZone: DISPLAY_TIME_ZONE,
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-}
-
-function Attachment({ filename, eager }: { filename: string; eager?: boolean | undefined }) {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
-  const filePath = `attachments/${filename}`;
-
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
-    return <div class="attachment"><img src={filePath} loading={eager ? "eager" : "lazy"} /></div>;
-  }
-  if (['mp4', 'mov', 'webm', '3gp'].includes(ext)) {
-    return (
-      <div class="attachment">
-        <div class="video-thumb">
-          <video src={filePath} />
-          <div class="play-icon">▶</div>
-        </div>
-      </div>
-    );
-  }
-  if (['mp3', 'ogg', 'opus', 'm4a', 'wav'].includes(ext)) {
-    // @ts-expect-error - @kitajs/html types are inconsistent for audio.controls
-    return <div class="attachment"><audio src={filePath} controls={true} /></div>;
-  }
-  return <div class="attachment"><a class="attachment-link" href={filePath}>📎 {filename}</a></div>;
-}
-
-function Message({ msg, eager, showSourceLinks = false }: { msg: MessageWithId & { observationIds?: string[]; unresolvedMedia?: true }; eager?: boolean | undefined; showSourceLinks?: boolean }) {
-  const date = new Date(msg.date);
-
-  if (msg.system) {
-    return (
-      <div class="message system">
-        <div class="bubble">
-          {msg.attachment && <Attachment filename={msg.attachment} eager={eager} />}{msg.message}
-        </div>
-      </div>
-    );
-  }
-
-  const author = msg.author ?? 'Unknown';
-
-  return (
-    <div class="message">
-      <div class="bubble">
-        <div class="author" style={{ color: authorColor(author) }}>{author}</div>
-        {msg.attachment && <Attachment filename={msg.attachment} eager={eager} />}
-        {msg.message && <div class="text">{msg.message}</div>}
-        {msg.unresolvedMedia && <p class="media-missing">Media has not been recovered from the saved exports.</p>}
-        {showSourceLinks && msg.observationIds && <a class="source-link" href={`provenance.html#${msg.id}`}>Inspect import records</a>}
-        <div class="time">{formatTime(date)}</div>
-      </div>
-    </div>
-  );
-}
-
-function DateSeparator({ date }: { date: Date }) {
-  return (
-    <div class="date-separator">
-      <span>{formatDate(date)}</span>
-    </div>
-  );
-}
-
 export interface ViewerOptions { mode: 'reading' | 'records' | 'activity' | 'unresolved'; rawCount: number; revision?: string }
 
 function ChatViewer({
@@ -575,14 +310,12 @@ function ChatViewer({
   showBackLink: boolean;
   options?: ViewerOptions;
 }) {
-  let lastDateStr = '';
-
   const filteredMessages = messages;
 
   // Embed manifest for the loader script
   // Escape < to prevent </script> injection via malicious filenames
   const showSourceLinks = options?.mode === 'activity' || options?.mode === 'unresolved';
-  const viewerManifest = { ...manifest, showSourceLinks };
+  const viewerManifest = { ...manifest, showSourceLinks, startAtLatestDay: options?.mode === 'reading', albums: options?.mode === 'reading' ? manifest.albums ?? [] : [] };
   const manifestScript = `window.__CHUNK_MANIFEST__ = ${JSON.stringify(viewerManifest).replace(/</g, '\\u003c')};`;
 
   // Format last updated date
@@ -596,13 +329,13 @@ function ChatViewer({
     <html lang="en">
       <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
         {options?.revision && <meta name="archive-revision" content={options.revision} />}
         <title>{groupName}</title>
         <script>{THEME_INIT_SCRIPT}</script>
         <style>{CHAT_CSS}</style>
         <script>{TOGGLE_SCRIPT}</script>
-        <script>{LIGHTBOX_SCRIPT}</script>
+        <script>{READER_SCRIPT}</script>
         <script>{manifestScript}</script>
       </head>
       <body>
@@ -624,22 +357,7 @@ function ChatViewer({
               <div id="load-sentinel"></div>
               <div id="chunk-loader" class="chunk-loader">Loading messages...</div>
               {filteredMessages.length === 0 && <p class="archive-empty">{options?.mode === 'unresolved' ? 'All media references have been resolved.' : 'No entries in this view.'}</p>}
-              {filteredMessages.map((msg, index) => {
-                const date = new Date(msg.date);
-                const dateStr = formatDate(date);
-                const showSeparator = dateStr !== lastDateStr;
-                if (showSeparator) lastDateStr = dateStr;
-
-                // Load last 20 messages eagerly so layout is stable at bottom
-                const isEager = index >= filteredMessages.length - 20;
-
-                return (
-                  <>
-                    {showSeparator && <DateSeparator date={date} />}
-                    <Message msg={msg} eager={isEager} showSourceLinks={showSourceLinks} />
-                  </>
-                );
-              })}
+              {renderReaderDay(filteredMessages, viewerManifest, true)}
             </div>
           </div>
 
@@ -693,7 +411,7 @@ function GroupList({ groups }: { groups: GroupInfo[] }) {
     <html lang="en">
       <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
         <title>WhatsApp Backups</title>
         {redirectScript && <script>{redirectScript}</script>}
         <script>{THEME_INIT_SCRIPT}</script>
