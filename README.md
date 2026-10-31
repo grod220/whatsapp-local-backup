@@ -45,11 +45,11 @@ Open **output/index.html** to read the site without installing anything. Keep th
 
 **Replacement is safe before it is tidy.** A new ZIP is uploaded under a temporary name while the old copy remains. The command downloads and verifies the entire candidate, proves the old file contents remain recoverable, and checks that the current records have not been shortened. Only then does it rename the candidate and move superseded copies to Trash. A failed run can leave extra temporary or previous ZIPs; a successful retry verifies them before cleanup. Unknown files or observed competing updates stop replacement. Use one publishing workspace at a time. The app never permanently empties Trash.
 
-Backups are incremental in what they preserve: unchanged media and originals are reused, and earlier changed file versions are retained through `archive/legacy-recovery/`. New generated backup ZIPs are never nested inside later ones. This avoids keeping another complete copy for every run. Exact WhatsApp export ZIPs are preserved unchanged, so overlapping original exports still take additional space. New records, originals, media and retained history naturally grow the archive.
+Backups are incremental in what they preserve: unchanged media and originals are reused, and earlier changed file versions are retained through `archive/legacy-recovery/`. Generated recovery ZIPs found in retained history are automatically unpacked into checksummed file references. Their unique contents are retained once; the redundant generated ZIP envelope is omitted. Original WhatsApp export ZIPs and genuine posted attachments always remain exact bytes. This avoids keeping another complete copy for every run. Exact WhatsApp export ZIPs are preserved unchanged, so overlapping original exports still take additional space. New records, originals, media and retained history naturally grow the archive.
 
 **A changed ordinary ZIP must be uploaded in full.** ZIP replacement is not an incremental network transfer. An unchanged run reuses the verified ZIP and checks Drive's SHA-256 without uploading another copy. Local generated ZIPs are cached under ignored `backups/automatic/`; after successful replacement only the current generated ZIP is kept there. User-created backups and original exports are never pruned.
 
-The former Drive object folder and guide files are migrated file for file into durable recovery history inside the ZIP before they move to Trash. Every old payload, including files absent from the current site, stays recoverable. Existing historical backup containers that were already present as file contents are retained exactly.
+The former Drive object folder and guide files are migrated file for file into durable recovery history inside the ZIP before they move to Trash. Every old payload, including files absent from the current site, stays recoverable. Historical generated ZIP envelopes recover as `.contents/` directories containing their original file trees. Their original container hashes and complete member inventories remain in `archive/legacy-recovery/containers/`. Local legacy source containers remain available as a safety copy; they are excluded from new ZIPs only after the full member inventory and every retained payload pass verification.
 
 ### One-time connections
 
@@ -133,7 +133,7 @@ npm run backup -- /Volumes/Backup/clemcast-new.zip
 npm run verify-backup -- /path/to/backup.zip
 ```
 
-The default **v3 complete recovery ZIP** contains `output/`, all retained `archive/` history, every original ZIP in `sources/`, checksummed inventories, and the exact project tooling/configuration needed to resume importing. Originals missing locally prevent creating a complete backup. Existing backups are never replaced.
+The default **complete recovery ZIP** contains `output/`, all retained `archive/` history, every original ZIP in `sources/`, checksummed inventories, and the exact project tooling/configuration needed to resume importing. Originals missing locally prevent creating a complete backup. Existing backups are never replaced.
 
 `npm run parse` creates the complete ZIP and safely replaces the Drive copy automatically. `npm run backup` creates an extra standalone local ZIP for another disk. Manual destination ZIPs are never overwritten. Periodically test recovery into a new directory.
 
@@ -144,6 +144,8 @@ npm run backup -- --reader /path/to/reader-backup.zip
 ```
 
 It includes the cumulative viewer, media and metadata history but excludes original ZIPs and tooling. Missing originals are reported. Earlier v2 backups remain readable and verifiable.
+
+Compacted recovery ZIPs use portable format v4; older v2 reader and v3 complete ZIPs remain supported. V4 validates every expanded-container dependency, including unique old files absent from the current site. Before replacing a pre-compaction backup, the command compares each original generated container’s complete member names and checksums against its retained inventory. An accidentally copied generated backup in site output blocks publication.
 
 Verification checks all stored SHA-256 values, follows every historical snapshot reference, validates observation/post coverage, checks original-export inventories, and requires all recovery dependencies. A checksum-consistent package that omits a required photo, original export, or snapshot fails verification.
 
@@ -171,7 +173,7 @@ npm run recover-legacy -- /path/to/unpacked-project LEGACY_SNAPSHOT.json /path/t
 npm run recover -- /path/to/complete-backup.zip /path/to/new-recovery-directory
 ```
 
-Recovery verifies the package before extraction, creates a new directory, and checks recovered history, media and originals. Existing destinations are refused. For a v3 backup with tooling, run `npm ci` in the recovered directory, then `npm run audit` or `npm run preview`. To resume on another existing checkout, transfer `output/`, `archive/`, and `sources/` together. Git excludes all private archive directories.
+Recovery verifies the package before extraction, creates a new directory, and checks recovered history, media and originals. Existing destinations are refused. For a complete backup with tooling, run `npm ci` in the recovered directory, then `npm run audit` or `npm run preview`. To resume on another existing checkout, transfer `output/`, `archive/`, and `sources/` together. Git excludes all private archive directories.
 
 To inspect a historical snapshot in another new output directory:
 
@@ -179,7 +181,7 @@ To inspect a historical snapshot in another new output directory:
 npm run restore -- /path/to/recovered/archive /path/to/new-historical-output SNAPSHOT_HASH
 ```
 
-The adjacent recovered `output/` supplies media. Both legacy v1 and current v2 snapshots are supported. Earlier legacy snapshots may predate source observations and reconciliation. They preserve their original record sets.
+The adjacent recovered `output/` supplies media. Both legacy v1 and current v2 metadata snapshots are supported. Earlier legacy snapshots may predate source observations and reconciliation. They preserve their original record sets.
 
 ## Migration from the legacy record index
 

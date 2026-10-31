@@ -7,16 +7,18 @@ import { readGroupFiles, validateOutput } from './importer.js';
 import { captureSnapshot } from './archive.js';
 import { isSafeFilename, sha256, writeImmutable } from './storage.js';
 import { verifyViews } from './verify-views.js';
+import { assertExpansionMatches, descriptorPath, flattenBackupContainers, parseExpandedBackup, type ExpandedBackup } from './backup-containers.js';
 
 interface PortableManifest {
   format: 'clemcast-portable';
-  version: 2 | 3;
+  version: 2 | 3 | 4;
   files: Record<string, string>;
   sourcesIncluded: boolean;
   separateSources: Array<{ sha256: string; originalNames: string[] }>;
   // Absent in older v2 backups, whose original-source availability was not checked.
   missingSources?: string[];
   toolingIncluded?: boolean;
+  expandedContainers?: Record<string, string>;
 }
 
 export const RECOVERY_TOOLING_PATHS = ['src', 'scripts', 'tests', 'package.json', 'package-lock.json', 'tsconfig.json', 'README.md', 'CONTEXT.md', 'clemcast.config.json', '.gitignore'];
@@ -110,13 +112,17 @@ export function collectRecoveryFiles(sourceDir: string, archiveDir: string, incl
     const settings = path.join(path.dirname(path.resolve(sourceDir)), 'clemcast.config.json');
     if (fs.existsSync(settings)) { const bytes = fs.readFileSync(settings); hashes['clemcast.config.json'] = sha256(bytes); files.set('clemcast.config.json', settings); }
   }
-  const readme = includeSources ? `CLEMCAST COMPLETE RECOVERY BACKUP (v3)\n\nThis backup includes output/, archive/, sources/ and the project tooling.\nPreserve the whole directory. Run npm ci, then npm run audit or npm run preview\nto verify and browse it. See README.md for importing and recovery instructions.\nOpen output/index.html directly to read offline without installing anything.\nOriginal ZIP bytes, source observations, reconciliation decisions and every\nretained snapshot/media are included. backup.json inventories SHA-256 checksums.\nRun npm run verify-backup -- FILE.zip and periodically recover into a new\ndirectory with npm run recover -- FILE.zip NEW_DIRECTORY.\n` : RECOVERY_README;
+  const readme = includeSources ? `CLEMCAST COMPLETE RECOVERY BACKUP\n\nThis backup includes output/, archive/, sources/ and the project tooling.\nPreserve the whole directory. Run npm ci, then npm run audit or npm run preview\nto verify and browse it. See README.md for importing and recovery instructions.\nOpen output/index.html directly to read offline without installing anything.\nOriginal ZIP bytes, source observations, reconciliation decisions and every\nretained snapshot/media are included. backup.json inventories SHA-256 checksums.\nRun npm run verify-backup -- FILE.zip and periodically recover into a new\ndirectory with npm run recover -- FILE.zip NEW_DIRECTORY.\n` : RECOVERY_README;
   hashes['README.txt'] = sha256(readme);
   files.set('README.txt', Buffer.from(readme));
+  const expandedContainers = flattenBackupContainers(files, path.dirname(path.resolve(archiveDir)), filename => verifyPortableBackup(filename));
+  // Flattening can add unique historical members and omit their redundant envelope.
+  const finalHashes = Object.fromEntries([...files].sort(([a], [b]) => a.localeCompare(b)).map(([name, file]) => [name, sha256(recoveryFileBytes(file))]));
   const manifest: PortableManifest = {
-    format: 'clemcast-portable', version: includeSources ? 3 : 2, files: hashes,
+    format: 'clemcast-portable', version: Object.keys(expandedContainers).length ? 4 : includeSources ? 3 : 2, files: finalHashes,
     sourcesIncluded: includeSources, separateSources: originals.sources, missingSources: originals.missing,
     ...(includeSources && { toolingIncluded: true }),
+    ...(Object.keys(expandedContainers).length && { expandedContainers }),
   };
   files.set('backup.json', Buffer.from(JSON.stringify(manifest, null, 2)));
   return files;
@@ -136,7 +142,7 @@ function createBackupZip(sourceDir: string, outputPath: string, archiveDir: stri
   const bytes = zip.toBuffer();
   const manifest = verifyZip(new AdmZip(bytes));
   writeImmutable(outputPath, bytes);
-  console.log(includeSources ? `Complete recovery v3: ${manifest.separateSources.length} original ZIPs included and verified, with all observations, decisions, snapshots and media.`
+  console.log(includeSources ? `Complete recovery v${manifest.version}: ${manifest.separateSources.length} original ZIPs included and verified, with all observations, decisions, snapshots and media.`
     : `Reader backup v2: original exports retained separately; ${manifest.missingSources?.length ?? 0} missing locally.`);
 }
 
@@ -144,8 +150,9 @@ function verifyZip(zip: AdmZip): PortableManifest {
   const entry = zip.getEntry('backup.json');
   if (!entry) throw new Error('Not a versioned portable backup: backup.json is missing');
   const manifest = JSON.parse(entry.getData().toString('utf8')) as PortableManifest;
-  if (manifest.format !== 'clemcast-portable' || ![2, 3].includes(manifest.version) || !manifest.files
-    || typeof manifest.files !== 'object' || Array.isArray(manifest.files) || manifest.sourcesIncluded !== (manifest.version === 3)
+  if (manifest.format !== 'clemcast-portable' || ![2, 3, 4].includes(manifest.version) || !manifest.files
+    || typeof manifest.files !== 'object' || Array.isArray(manifest.files) || typeof manifest.sourcesIncluded !== 'boolean'
+    || (manifest.version !== 4 && manifest.sourcesIncluded !== (manifest.version === 3))
     || !Array.isArray(manifest.separateSources)) {
     throw new Error('Unsupported portable backup format');
   }
@@ -164,10 +171,27 @@ function verifyZip(zip: AdmZip): PortableManifest {
 
 /** Independently follow recovery references; the ZIP's own inventory can be incomplete. */
 function verifyRecovery(reader: { has: (name: string) => boolean; read: (name: string) => Buffer }, manifest: PortableManifest): void {
+  const expanded: Record<string, ExpandedBackup> = {};
+  const descriptors = manifest.expandedContainers ?? {};
+  if (typeof descriptors !== 'object' || Array.isArray(descriptors) || (manifest.version !== 4 && Object.keys(descriptors).length)) throw new Error('Invalid expanded backup catalog');
+  for (const [hash, name] of Object.entries(descriptors)) {
+    if (name !== descriptorPath(hash) || !Object.hasOwn(manifest.files, name) || !reader.has(name)) throw new Error('Expanded backup descriptor is missing');
+    expanded[hash] = parseExpandedBackup(reader.read(name), hash);
+    if (reader.has(expanded[hash]!.containerPath)) throw new Error('Redundant generated backup envelope remains in compacted backup');
+  }
+  const resolving = new Set<string>();
   const reference = (relative: string, hash?: string): void => {
+    if (hash && expanded[hash]?.containerPath === relative) {
+      if (resolving.has(hash)) throw new Error('Cyclic expanded backup reference');
+      resolving.add(hash);
+      for (const member of Object.values(expanded[hash]!.files)) reference(expanded[hash]!.locations[member]!, member);
+      resolving.delete(hash); return;
+    }
     if (!reader.has(relative) || !Object.hasOwn(manifest.files, relative)) throw new Error(`Backup recovery file is missing: ${relative}`);
     if (hash && manifest.files[relative] !== hash) throw new Error(`Backup recovery checksum mismatch: ${relative}`);
   };
+  // Every expanded member is required even if no older snapshot happens to reference it.
+  for (const [hash, value] of Object.entries(expanded)) reference(value.containerPath, hash);
   const read = (relative: string, hash?: string): Buffer => { reference(relative, hash); return reader.read(relative); };
   const latest: unknown = JSON.parse(read('archive/latest.json').toString('utf8')).snapshot;
   if (typeof latest !== 'string' || !/^[a-f0-9]{64}$/.test(latest)) throw new Error('Invalid latest snapshot in backup');
@@ -246,8 +270,8 @@ function verifyRecovery(reader: { has: (name: string) => boolean; read: (name: s
 export function verifyRecoveryTree(directory: string): void {
   const read = (relative: string) => fs.readFileSync(path.join(directory, relative));
   const manifest = JSON.parse(read('backup.json').toString('utf8')) as PortableManifest;
-  if (manifest.format !== 'clemcast-portable' || ![2, 3].includes(manifest.version) || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)
-    || manifest.sourcesIncluded !== (manifest.version === 3) || !Array.isArray(manifest.separateSources)) throw new Error('Invalid recovered backup inventory');
+  if (manifest.format !== 'clemcast-portable' || ![2, 3, 4].includes(manifest.version) || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)
+    || typeof manifest.sourcesIncluded !== 'boolean' || (manifest.version !== 4 && manifest.sourcesIncluded !== (manifest.version === 3)) || !Array.isArray(manifest.separateSources)) throw new Error('Invalid recovered backup inventory');
   for (const [relative, hash] of Object.entries(manifest.files)) {
     if (!relative.split('/').every(isSafeFilename) || !/^[a-f0-9]{64}$/.test(hash) || sha256(read(relative)) !== hash) throw new Error(`Recovered backup checksum mismatch: ${relative}`);
   }
@@ -265,7 +289,13 @@ export function verifyPortableBackup(filename: string, outputDir?: string, archi
   const manifest = verifyZip(new AdmZip(bytes));
   if (outputDir && archiveDir) {
     for (const [relative, file] of portableFiles(outputDir, archiveDir)) {
-      if (manifest.files[relative] !== sha256(fs.readFileSync(file))) throw new Error(`Backup does not cover current history: ${relative}`);
+      const bytes = fs.readFileSync(file), hash = sha256(bytes);
+      if (manifest.files[relative] !== hash) {
+        const descriptor = manifest.expandedContainers?.[hash];
+        if (!descriptor || relative !== `archive/legacy-recovery/objects/${hash}`) throw new Error(`Backup does not cover current history: ${relative}`);
+        const zip = new AdmZip(filename);
+        assertExpansionMatches(bytes, parseExpandedBackup(zip.getEntry(descriptor)!.getData(), hash));
+      }
     }
     if (JSON.stringify(manifest.separateSources) !== JSON.stringify(sourceInventory(archiveDir))) throw new Error('Backup source inventory is out of date');
   }

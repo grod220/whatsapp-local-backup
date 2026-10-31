@@ -7,8 +7,9 @@ import { sha256, writeAtomic, writeImmutable, assertMessagesRetained, publishNew
 import { assertEvidenceRetained } from './evidence.js';
 import { safeRelative, type BackupStore, type StoredFile } from './backup-store.js';
 import { BACKUP_DATA } from './incremental.js';
+import { assertExpansionMatches, expansionCatalog, type ExpandedBackup } from './backup-containers.js';
 
-interface FileSet { hashes: Record<string, string>; read: (name: string) => Buffer }
+interface FileSet { hashes: Record<string, string>; read: (name: string) => Buffer; expanded?: Record<string, ExpandedBackup> }
 export interface ZipCheckpoint { filename: string; fingerprint: string; sha256: string; bytes: number }
 const sorted = <T>(value: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
 const protectedFile = (name: string): boolean => /^sources\//.test(name) || (name.startsWith('archive/') && name !== 'archive/latest.json') || /^output\/[^/]+\/attachments\//.test(name);
@@ -19,7 +20,7 @@ const cacheDirectory = (workspace: string): string => path.join(workspace, 'back
 
 function currentFiles(workspace: string): FileSet {
   const files = collectRecoveryFiles(path.join(workspace, 'output'), path.join(workspace, 'archive'));
-  return { hashes: sorted(Object.fromEntries([...files].map(([name, file]) => [name, sha256(recoveryFileBytes(file))]))),
+  return { expanded: expansionCatalog(files), hashes: sorted(Object.fromEntries([...files].map(([name, file]) => [name, sha256(recoveryFileBytes(file))]))),
     read: name => { const file = files.get(name); if (!file) throw new Error(`Missing recovery file: ${name}`); return recoveryFileBytes(file); } };
 }
 function zipFiles(filename: string): FileSet {
@@ -35,7 +36,9 @@ function zipFiles(filename: string): FileSet {
 /** A historical copy alone is insufficient: earlier records must remain in the current reader too. */
 export function assertArchiveRetained(previous: FileSet, current: FileSet): void {
   for (const [name, hash] of Object.entries(previous.hashes)) {
-    if (protectedFile(name) && current.hashes[name] !== hash) throw new Error(`Previously backed-up file removed or changed: ${name}`);
+    const expansion = current.expanded?.[hash];
+    if (expansion) assertExpansionMatches(previous.read(name), expansion);
+    if (protectedFile(name) && current.hashes[name] !== hash && !(expansion && name === expansion.containerPath)) throw new Error(`Previously backed-up file removed or changed: ${name}`);
     if (!/^output\/[^/]+\/(data|evidence|decisions|manifest)\.json$/.test(name)) continue;
     if (!current.hashes[name]) throw new Error(`Previously backed-up group metadata missing: ${name}`);
     const before = JSON.parse(previous.read(name).toString('utf8')), after = JSON.parse(current.read(name).toString('utf8'));
@@ -56,6 +59,10 @@ function retainFiles(workspace: string, previous: FileSet, originalName: string,
   const immutable = new Map(Object.entries(current.hashes).filter(([name]) => protectedFile(name)).map(([name, hash]) => [hash, name]));
   for (const [oldName, hash] of Object.entries(previous.hashes)) {
     let name = immutable.get(hash);
+    if (!name && current.expanded?.[hash]) {
+      assertExpansionMatches(previous.read(oldName), current.expanded[hash]!);
+      name = current.expanded[hash]!.containerPath;
+    }
     if (!name) {
       name = `archive/legacy-recovery/objects/${hash}`;
       const bytes = previous.read(oldName);
@@ -188,7 +195,8 @@ export function publishZipBackup(workspace: string, initialCheckpoint: ZipCheckp
     }
     checkpoint = prepareZipBackup(workspace);
     const payloadHashes = new Set(Object.values(zipFiles(checkpoint.filename).hashes));
-    for (const hash of required) if (!payloadHashes.has(hash)) throw new Error(`Previous backup bytes missing from replacement: ${hash}`);
+    const expanded = currentFiles(workspace).expanded ?? {};
+    for (const hash of required) if (!payloadHashes.has(hash) && !expanded[hash]) throw new Error(`Previous backup bytes missing from replacement: ${hash}`);
     const name = dateName(timeZone), candidate = `.Clemcast-upload-${checkpoint.sha256}.zip`;
     const uploadDir = path.join(temporary, 'upload'); fs.mkdirSync(uploadDir);
     fs.linkSync(checkpoint.filename, path.join(uploadDir, candidate));

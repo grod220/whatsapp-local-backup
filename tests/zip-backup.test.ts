@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import AdmZip from 'adm-zip';
+import { randomBytes } from 'node:crypto';
+import { recoverHistoricalFiles } from '../src/backup-containers.js';
+import { verifyRecoveryTree } from '../src/zip-output.js';
 import { importBackup, loadGroup } from '../src/importer.js';
 import { renderOutput } from '../src/render.js';
 import { captureSnapshot } from '../src/archive.js';
@@ -14,13 +17,13 @@ import { verifyPortableBackup } from '../src/zip-output.js';
 import { sha256 } from '../src/storage.js';
 
 const text = '[20/01/2026, 12:00:00] Alex: Family update\n[20/01/2026, 12:00:01] Alex: <attached: photo.jpg>';
-function fixture(t: { after: (f: () => void) => void }) {
+function fixture(t: { after: (f: () => void) => void }, media = Buffer.from('family photo')) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'clemcast-zip-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const workspace = path.join(dir, 'project'), remote = path.join(dir, 'drive'); fs.mkdirSync(workspace); fs.mkdirSync(remote);
   const output = path.join(workspace, 'output'), archive = path.join(workspace, 'archive');
   const add = (body = text) => {
-    const zip = new AdmZip(); zip.addFile('_chat.txt', Buffer.from(body)); zip.addFile('photo.jpg', Buffer.from('family photo'));
+    const zip = new AdmZip(); zip.addFile('_chat.txt', Buffer.from(body)); zip.addFile('photo.jpg', media);
     const filename = path.join(dir, 'WhatsApp Chat - Family.zip'); zip.writeZip(filename);
     importBackup(filename, output, archive, { timeZone: 'Europe/Rome', daysFirst: true }); renderOutput(output); captureSnapshot(output, archive);
   };
@@ -116,4 +119,101 @@ test('cleanup interrupted after promotion safely resumes even when the old CURRE
   assert.throws(() => f.publish(new InterruptedTrash(f.remote)), /Trash interrupted/);
   assert.ok(f.names().some(name => name.endsWith(' - Clemcast.zip')));
   const result = f.publish(); assert.deepEqual(f.names(), [result.name]); verifyPortableBackup(path.join(f.remote, result.name));
+});
+
+test('nested generated backups are flattened on the real parse publication path, preserving unique files and posts', t => {
+  const f = fixture(t, randomBytes(512 * 1024));
+  fs.writeFileSync(path.join(f.output, 'older-note.txt'), 'Unique file from an older backup');
+  const old = prepareZipBackup(f.workspace), nestedBytes = fs.readFileSync(old.filename), nestedHash = sha256(nestedBytes);
+  fs.unlinkSync(path.join(f.output, 'older-note.txt'));
+  f.add(text + '\n[21/01/2026, 12:00:00] Alex: Latest post');
+  const object = `archive/legacy-recovery/objects/${nestedHash}`;
+  fs.mkdirSync(path.dirname(path.join(f.workspace, object)), { recursive: true });
+  fs.writeFileSync(path.join(f.workspace, object), nestedBytes);
+  const snapshots = path.join(f.archive, 'legacy-recovery/snapshots'); fs.mkdirSync(snapshots, { recursive: true });
+  fs.writeFileSync(path.join(snapshots, 'old-package.json'), JSON.stringify({ format: 'clemcast-legacy-recovery', version: 1,
+    originalName: 'Older full backup', files: { 'cumulative-backup.zip': nestedHash }, locations: { [nestedHash]: object } }));
+  const result = f.publish(), zip = new AdmZip(path.join(f.remote, result.name));
+  assert.equal(zip.getEntry(object), null, 'must not preserve a full generated ZIP as an opaque object');
+  assert.ok(result.bytes < nestedBytes.length * 2, 'shared media must not be duplicated through a generated container');
+  const original = new AdmZip(nestedBytes).getEntries().find(entry => entry.entryName.startsWith('sources/'))!;
+  assert.deepEqual(zip.getEntry(original.entryName)!.getData(), original.getData(), 'original WhatsApp ZIP stays byte-exact');
+  assert.ok(zip.getEntries().some(entry => sha256(entry.getData()) === sha256('Unique file from an older backup')), 'unique historical file retained');
+  assert.deepEqual(zip.getEntry('output/family/data.json')!.getData(), fs.readFileSync(path.join(f.output, 'family/data.json')));
+  verifyPortableBackup(path.join(f.remote, result.name));
+  const restored = path.join(f.dir, 'compacted'); recoverDriveZip(f.store, restored);
+  verifyRecoveryTree(restored);
+  const manifest = JSON.parse(fs.readFileSync(path.join(restored, 'archive/legacy-recovery/snapshots/old-package.json'), 'utf8'));
+  const historical = path.join(f.dir, 'historical'); fs.mkdirSync(historical);
+  recoverHistoricalFiles(restored, manifest.files, manifest.locations, historical);
+  assert.equal(fs.readFileSync(path.join(historical, 'cumulative-backup.zip.contents/output/older-note.txt'), 'utf8'), 'Unique file from an older backup');
+  for (const entry of new AdmZip(nestedBytes).getEntries()) if (!entry.isDirectory) assert.deepEqual(fs.readFileSync(path.join(historical, 'cumulative-backup.zip.contents', entry.entryName)), entry.getData());
+  const damaged = new AdmZip(path.join(f.remote, result.name)), inventory = JSON.parse(damaged.getEntry('backup.json')!.getData().toString());
+  const unique = damaged.getEntries().find(entry => sha256(entry.getData()) === sha256('Unique file from an older backup'))!.entryName;
+  damaged.deleteFile(unique); delete inventory.files[unique]; damaged.updateFile('backup.json', Buffer.from(JSON.stringify(inventory)));
+  const bad = path.join(f.dir, 'missing-historical-file.zip'); damaged.writeZip(bad);
+  assert.throws(() => verifyPortableBackup(bad), /missing/);
+  assert.throws(() => recoverHistoricalFiles(restored, { '../escape': '0'.repeat(64) }, { ['0'.repeat(64)]: object }, historical), /Unsafe/);
+  assert.deepEqual(loadGroup(path.join(restored, 'output/family')), loadGroup(path.join(f.output, 'family')));
+  assert.equal(f.publish().uploaded, false, 'unchanged replay cannot grow nested backups again');
+});
+
+test('a previously uploaded large ZIP is replaced only after all its unique contents survive compaction', t => {
+  const f = fixture(t, randomBytes(256 * 1024));
+  fs.writeFileSync(path.join(f.output, 'previous-note.txt'), 'Historical unique note');
+  const nested = fs.readFileSync(prepareZipBackup(f.workspace).filename), hash = sha256(nested);
+  fs.unlinkSync(path.join(f.output, 'previous-note.txt')); f.add(text + '\n[21/01/2026, 12:00:00] Alex: Current post');
+  const base = prepareZipBackup(f.workspace), large = new AdmZip(base.filename), object = `archive/legacy-recovery/objects/${hash}`;
+  const snapshot = 'archive/legacy-recovery/snapshots/older-nested.json';
+  const mapping = Buffer.from(JSON.stringify({ format: 'clemcast-legacy-recovery', version: 1, originalName: 'Older backup', files: { 'cumulative-backup.zip': hash }, locations: { [hash]: object } }));
+  large.addFile(object, nested); large.addFile(snapshot, mapping);
+  const manifest = JSON.parse(large.getEntry('backup.json')!.getData().toString()); manifest.files[object] = hash; manifest.files[snapshot] = sha256(mapping);
+  large.updateFile('backup.json', Buffer.from(JSON.stringify(manifest)));
+  const name = '2026-10-30 - Clemcast.zip'; large.writeZip(path.join(f.remote, name)); verifyPortableBackup(path.join(f.remote, name));
+  fs.mkdirSync(path.dirname(path.join(f.workspace, object)), { recursive: true }); fs.writeFileSync(path.join(f.workspace, object), nested);
+  fs.mkdirSync(path.dirname(path.join(f.workspace, snapshot)), { recursive: true }); fs.writeFileSync(path.join(f.workspace, snapshot), mapping);
+  const before = fs.statSync(path.join(f.remote, name)).size, result = f.publish();
+  assert.ok(result.bytes < before, 'cloud replacement must actually be smaller');
+  assert.deepEqual(f.names(), [result.name]);
+  const small = new AdmZip(path.join(f.remote, result.name));
+  const hashes = new Set(small.getEntries().filter(entry => !entry.isDirectory).map(entry => sha256(entry.getData())));
+  for (const entry of large.getEntries()) if (!entry.isDirectory && entry.entryName !== object) assert.ok(hashes.has(sha256(entry.getData())), entry.entryName);
+  for (const entry of new AdmZip(nested).getEntries()) if (!entry.isDirectory) assert.ok(hashes.has(sha256(entry.getData())), entry.entryName);
+  const descriptor = path.join(f.workspace, JSON.parse(small.getEntry('backup.json')!.getData().toString()).expandedContainers[hash]);
+  const good = fs.readFileSync(descriptor), bad = JSON.parse(good.toString()); delete bad.files['output/previous-note.txt']; fs.writeFileSync(descriptor, JSON.stringify(bad));
+  assert.throws(() => f.publish(), /lose or change/);
+  assert.equal(sha256(fs.readFileSync(path.join(f.remote, result.name))), result.sha256);
+  fs.writeFileSync(descriptor, good); assert.equal(f.publish().uploaded, false);
+});
+
+test('original WhatsApp exports and authentic posted ZIP attachments are never expanded', t => {
+  const first = fixture(t), generated = fs.readFileSync(prepareZipBackup(first.workspace).filename);
+  const second = fixture(t, generated), result = second.publish(), zip = new AdmZip(path.join(second.remote, result.name));
+  const media = zip.getEntries().find(entry => entry.entryName.startsWith('output/family/attachments/'))!;
+  assert.deepEqual(media.getData(), generated);
+  const manifest = JSON.parse(zip.getEntry('backup.json')!.getData().toString()); assert.equal(manifest.expandedContainers, undefined);
+});
+
+test('an accidentally copied generated backup in site output blocks publication instead of being nested', t => {
+  const f = fixture(t), generated = prepareZipBackup(f.workspace);
+  fs.copyFileSync(generated.filename, path.join(f.output, 'accidental-backup.zip'));
+  assert.throws(() => f.publish(), /Generated backup found outside recovery history/); assert.deepEqual(f.names(), []);
+});
+
+test('multiple generated backup layers expand recursively and restore every nested file', t => {
+  const f = fixture(t), inner = fs.readFileSync(prepareZipBackup(f.workspace).filename), outer = new AdmZip(inner);
+  outer.addFile('nested-backup.zip', inner);
+  const manifest = JSON.parse(outer.getEntry('backup.json')!.getData().toString()); manifest.files['nested-backup.zip'] = sha256(inner);
+  outer.updateFile('backup.json', Buffer.from(JSON.stringify(manifest)));
+  const data = outer.toBuffer(), hash = sha256(data), object = `archive/legacy-recovery/objects/${hash}`;
+  fs.mkdirSync(path.dirname(path.join(f.workspace, object)), { recursive: true }); fs.writeFileSync(path.join(f.workspace, object), data);
+  const snapshots = path.join(f.archive, 'legacy-recovery/snapshots'); fs.mkdirSync(snapshots, { recursive: true });
+  const mapping = { format: 'clemcast-legacy-recovery', version: 1, files: { 'outer.zip': hash }, locations: { [hash]: object } };
+  fs.writeFileSync(path.join(snapshots, 'layers.json'), JSON.stringify(mapping));
+  const result = f.publish(), zip = new AdmZip(path.join(f.remote, result.name));
+  assert.equal(zip.getEntry(object), null); assert.equal(zip.getEntry(`archive/legacy-recovery/objects/${sha256(inner)}`), null);
+  const recovered = path.join(f.dir, 'layers'); recoverDriveZip(f.store, recovered);
+  const oldFiles = path.join(f.dir, 'old-layers'); fs.mkdirSync(oldFiles);
+  recoverHistoricalFiles(recovered, mapping.files, mapping.locations, oldFiles);
+  assert.deepEqual(fs.readFileSync(path.join(oldFiles, 'outer.zip.contents/nested-backup.zip.contents/output/family/data.json')), fs.readFileSync(path.join(f.output, 'family/data.json')));
 });

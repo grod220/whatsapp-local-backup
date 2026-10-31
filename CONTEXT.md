@@ -23,3 +23,7 @@ A growing family archive assembled from overlapping WhatsApp exports.
 **Current backup**: The single dated `YYYY-MM-DD - Clemcast.zip` in the Google Drive folder named `Clemcast`. It directly contains the site output, original exports, history and tooling. Safe replacement requires retention checks and full Drive download verification before superseded containers move to recoverable Trash. Changed ZIPs upload in full; unchanged runs reuse the verified copy.
 
 **Legacy recovery history**: The verified file contents of older generated full backup ZIPs, including files absent from the current reader. Durable mappings in `archive/legacy-recovery/` keep this history recoverable from a standalone ZIP too.
+
+**Generated backup container**: A derived recovery ZIP, distinct from an exact WhatsApp source export or authentic posted attachment. When retained inside historical backups it is expanded into a complete checksummed member inventory. Its original file contents remain recoverable, without retaining another full ZIP envelope in each new backup.
+
+**Expanded container**: A v4 recovery descriptor in `archive/legacy-recovery/containers/`. It records the original generated ZIP hash, size, member paths and content hashes, with durable locations for each payload. Older references resolve through this descriptor; recovery produces a `.contents/` directory. Expansion requires comparison against the complete original container before cloud replacement. Source exports, posted media, and current post records never use this exception.
