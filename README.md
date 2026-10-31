@@ -9,10 +9,37 @@ Requires Node.js 22 or newer.
 ```sh
 npm ci
 npm run parse
-npm run preview
 ```
 
-`parse` finds matching WhatsApp ZIPs in Downloads, saves the original bytes, imports source observations, reconciles posts, rebuilds every view, verifies retained history, and creates a uniquely named **complete recovery backup** on the Desktop. Earlier exports, records, and media remain available when a newer export contains less history. Publishing remains a separate command.
+Export the chat **with media** from WhatsApp and save the ZIP in Downloads. `npm run parse` then performs the whole workflow:
+
+1. Preserve the original ZIPs, import observations, reconcile posts, and rebuild the reader.
+2. Verify retained history and create a **complete recovery backup** on the Desktop.
+3. Copy that ZIP to the existing Clemcast Google Drive folder, then download its bytes and verify its SHA-256 checksum.
+4. Publish the website to Cloudflare Pages, skipping unchanged output.
+
+Earlier exports, records, media and dated backups remain intact. Website publication runs only after the offsite backup passes verification. A failure returns a nonzero exit status and tells you where the safe local ZIP is. Rerun the same command to retry; unchanged archive/tooling reuses the exact saved ZIP, and Drive copies never overwrite a different backup. `.publish-state.json` is local retry/verification bookkeeping and is excluded from Git and recovery packages.
+
+If Downloads contains no matching exports, `parse` backs up and publishes the existing archive. An empty project still requires an export. Use `npm run preview` to browse locally.
+
+### One-time connections
+
+Install [rclone](https://rclone.org/install/) (on macOS: `brew install rclone`), then connect Google Drive and Cloudflare:
+
+```sh
+npm run setup-drive
+npx wrangler login
+```
+
+The first Drive setup requires a dedicated Google **Desktop app** OAuth client; rclone's shared client is retiring in 2026 and is quota-blocked. In a personal Google Cloud project, enable the Google Drive API, configure an external OAuth app for your own account, and create a Desktop app client. Download its JSON and run `npm run setup-drive -- "/path/to/client.json"`. Follow [rclone's official client setup guide](https://rclone.org/drive/#making-your-own-client-id). Set the OAuth app to **In production** after configuration; Google's Testing mode expires refresh tokens after seven days. This publishes the OAuth app configuration, not your archive or Drive files. Personal use under Google's user limit does not require distributing the app.
+
+`setup-drive` uses a browser Google sign-in. Google credentials live in `~/.config/clemcast/rclone.conf`, outside the repository and recovery ZIPs. Commands target only the folder ID in `clemcast.config.json`; OAuth's Drive scope itself grants broader Drive access. No automatic command deletes cloud backups. Reconnect only if Google revokes access; a recovered/new computer needs its own connections.
+
+To import and create a verified local backup while offline, without uploading or publishing:
+
+```sh
+npm run parse -- --local-only
+```
 
 To select an export or backup destination:
 
@@ -77,7 +104,7 @@ npm run verify-backup -- /path/to/backup.zip
 
 The default **v3 complete recovery ZIP** contains `output/`, all retained `archive/` history, every original ZIP in `sources/`, checksummed inventories, and the exact project tooling/configuration needed to resume importing. Originals missing locally prevent creating a complete backup. Existing backups are never replaced.
 
-Keep dated copies in the existing offsite Clemcast backup folder and retain earlier backups. Download a copy, verify it, and periodically recover into a new directory. A local snapshot alone is not an offsite backup. Imports and backups do not automatically upload to Drive.
+`npm run parse` automatically copies a complete ZIP to the existing offsite Clemcast backup folder and verifies the downloaded bytes before publishing. `npm run backup` remains a local-only backup command. Retain earlier backups and periodically recover a downloaded copy into a new directory. A local snapshot alone is not an offsite backup.
 
 A smaller **v2 reader backup** remains available explicitly:
 

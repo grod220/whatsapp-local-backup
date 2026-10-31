@@ -4,6 +4,7 @@
   "description": "WhatsApp chat export parser with deduplication",
   "scripts": {
     "parse": "tsc --noEmit && tsx src/index.ts",
+    "setup-drive": "tsx scripts/setup-drive.ts",
     "refresh-html": "tsx scripts/rebuild-output-html.ts",
     "preview": "npm run refresh-html && node scripts/serve-output.mjs",
     "local": "npm run preview",

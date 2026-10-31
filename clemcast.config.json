@@ -1,3 +1,7 @@
 {
-  "timeZone": "Europe/Rome"
+  "timeZone": "Europe/Rome",
+  "driveBackup": {
+    "remote": "clemcast",
+    "folderId": "1JMFITdKizlowBQaTbeOr8c_bE_fA1oAD"
+  }
 }

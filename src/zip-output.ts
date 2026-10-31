@@ -19,6 +19,8 @@ interface PortableManifest {
   toolingIncluded?: boolean;
 }
 
+export const RECOVERY_TOOLING_PATHS = ['src', 'scripts', 'tests', 'package.json', 'package-lock.json', 'tsconfig.json', 'README.md', 'CONTEXT.md', 'clemcast.config.json', '.gitignore'];
+
 const RECOVERY_README = `CLEMCAST BACKUP\n\nOpen output/index.html in a browser to read your chats offline.\n\nThis ZIP contains the cumulative messages and media, plus every retained\nmessage/metadata snapshot. Each media file is stored in output/ only.\nbackup.json contains SHA-256 checksums for every file in the ZIP.\n\nTo resume importing on another computer, copy both output/ and archive/\ninto the Clemcast project. Keep previous backups.\n\nTo restore a historical snapshot using the project:\n  npm run restore -- /path/to/unpacked/archive recovered-output SNAPSHOT_HASH\nThe adjacent unpacked output/ supplies the verified media. The restore\ncommand never replaces an existing directory.\n\nOriginal WhatsApp export ZIPs are stored separately in sources/ on the\noriginal computer. They are NOT included here. backup.json lists their\nhashes and original names; missingSources records originals missing locally\nwhen this backup was created. Older v2 backups did not check availability.\nSave each original export offsite once; keep\nthose originals for reparsing. This ZIP can restore the cumulative viewer\nand its history without the originals, but cannot recreate the source ZIPs.\n\nMetadata snapshots can repair message history using intact media. If media\nis lost or damaged locally, recover it from a complete offsite backup.\n`;
 
 /** Verify all snapshots before omitting any duplicate media object. */
@@ -107,7 +109,7 @@ function createBackupZip(sourceDir: string, outputPath: string, archiveDir: stri
       else if (entry.isFile()) { const bytes = fs.readFileSync(filename); hashes[relative] = sha256(bytes); zip.addFile(relative, bytes); }
       else throw new Error(`Unexpected recovery tooling file: ${relative}`);
     };
-    for (const relative of ['src', 'scripts', 'tests', 'package.json', 'package-lock.json', 'tsconfig.json', 'README.md', 'CONTEXT.md', 'clemcast.config.json', '.gitignore']) add(relative);
+    for (const relative of RECOVERY_TOOLING_PATHS) add(relative);
     const settings = path.join(path.dirname(path.resolve(sourceDir)), 'clemcast.config.json');
     if (fs.existsSync(settings)) { const bytes = fs.readFileSync(settings); hashes['clemcast.config.json'] = sha256(bytes); zip.addFile('clemcast.config.json', bytes); }
   }

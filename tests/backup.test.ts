@@ -294,14 +294,14 @@ test('CLI uses explicit ZIP arguments, creates a cumulative portable backup and 
   const first = f.zip('WhatsApp Chat - Family.zip', line(20, 1, 'Old phone'));
   const second = f.zip('WhatsApp Chat - Family (1).zip', line(21, 1, 'New phone'));
   const backup = path.join(f.workspace, 'portable.zip');
-  const args = ['--import', tsx, cli, '--timezone', 'UTC', '--days-first', '--backup-to', backup, first, second];
+  const args = ['--import', tsx, cli, '--local-only', '--timezone', 'UTC', '--days-first', '--backup-to', backup, first, second];
   const result = spawnSync(process.execPath, args, { cwd: f.workspace, encoding: 'utf8', env: cliEnv });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(f.read().messages.length, 2);
   const backupBytes = fs.readFileSync(backup);
   const replay = spawnSync(process.execPath, args, { cwd: f.workspace, encoding: 'utf8', env: cliEnv });
-  assert.equal(replay.status, 1);
-  assert.match(replay.stderr, /already exists/);
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.match(replay.stdout, /Reusing verified recovery backup/);
   assert.equal(f.read().messages.length, 2);
   assert.deepEqual(fs.readFileSync(backup), backupBytes);
 });

@@ -11,3 +11,4 @@ restored-output/
 .backup-lock/
 backups/
 sources/
+.publish-state.json
