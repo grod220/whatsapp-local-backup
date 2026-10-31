@@ -31,3 +31,5 @@ A growing family archive assembled from overlapping WhatsApp exports.
 **Reading album**: A reversible display group of three or more consecutive saved photos/videos by one author, bounded to one minute from the first item and one display day. Text, other senders, notices, unsupported media and unresolved media split batches. Album manifests reference individual post IDs; they never merge canonical posts or source observations.
 
 **Video poster**: A small derived JPEG used for a media preview. It is kept separately from the unchanged original attachment, can be rebuilt, and is included in the site and recovery ZIP.
+
+**Date navigation**: A display-only index over the existing local-day chunk manifest. A month jump starts at its earliest saved day, loads it directly, and keeps adjacent older/newer days reachable. It uses the configured display timezone and works from the offline ZIP through JSONP. The index never changes post identity, media, observations, or preservation history.

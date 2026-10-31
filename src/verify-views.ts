@@ -8,6 +8,7 @@ import { VIEW_VERSION } from './settings.js';
 import { DISPLAY_TIME_ZONE } from './settings.js';
 import { findAlbums, mediaKind } from './albums.js';
 import { renderReaderDay } from './reader-runtime.js';
+import { timelineMonths } from './timeline-runtime.js';
 
 /** Publishing checks the actual generated day files against preserved inputs. */
 export function verifyViews(outputDir: string): void {
@@ -37,6 +38,13 @@ export function verifyViews(outputDir: string): void {
         if (!source || mediaKind(name) !== 'video' || preview.file !== `previews/${source}.jpg`
           || !/^[a-f0-9]{64}$/.test(preview.sha256) || sha256(fs.readFileSync(path.join(dir, preview.file))) !== preview.sha256) throw new Error('Video preview is missing or changed; rebuild the reading view');
       }
+      const dates = chunks.chunks.map(chunk => chunk.date);
+      if (new Set(dates).size !== dates.length || dates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date))
+        || JSON.stringify(dates) !== JSON.stringify([...dates].sort().reverse())) throw new Error('Viewer date navigation has an invalid day index');
+      const viewerFile = folder === 'chunks' ? 'index.html' : `${folder.replace('-chunks', '')}.html`;
+      const viewerHtml = fs.readFileSync(path.join(dir, viewerFile), 'utf8');
+      if (dates.length && (!viewerHtml.includes('id="date-navigation"') || !viewerHtml.includes('id="timeline-days"')
+        || timelineMonths(chunks).some(month => !viewerHtml.includes(`<option value="${month.slice(0, 4)}">`)))) throw new Error('Viewer date navigation is incomplete');
       const actual: MessageWithId[] = [];
       for (const chunk of chunks.chunks) {
         if (!isSafeFilename(chunk.filename)) throw new Error('Invalid viewer chunk filename');
@@ -45,6 +53,8 @@ export function verifyViews(outputDir: string): void {
         if (!match || JSON.parse(match[1]!) !== chunk.date) throw new Error('Invalid viewer chunk');
         const records = JSON.parse(match[2]!) as MessageWithId[];
         if (records.length !== chunk.messageCount) throw new Error('Viewer day count mismatch');
+        if (records[0]?.id !== chunk.firstMessageId || records.at(-1)?.id !== chunk.lastMessageId
+          || records.some(record => new Intl.DateTimeFormat('en-CA', { timeZone: DISPLAY_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(record.date)) !== chunk.date)) throw new Error('Viewer date index mismatch');
         actual.push(...records);
       }
       const found = new Map(actual.map(m => [m.id, m]));

@@ -130,66 +130,6 @@ body::-webkit-scrollbar {
   }
 }
 
-/* Sentinel element for IntersectionObserver */
-#load-sentinel {
-  height: 1px;
-  width: 100%;
-}
-
-/* Loading indicator */
-.chunk-loader {
-  position: fixed;
-  top: 16px;
-  left: 16px;
-  z-index: 1000;
-  padding: 10px 14px;
-  color: var(--text-muted);
-  font-size: 0.9rem;
-  opacity: 0;
-  transition: opacity 0.3s ease-out;
-  pointer-events: none;
-}
-
-.chunk-loader.visible {
-  opacity: 1;
-}
-
-.chunk-loader.error {
-  pointer-events: auto;
-  background: var(--toggle-bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  max-width: calc(100vw - 32px);
-}
-
-.chunk-loader.error::before {
-  display: none;
-}
-
-.chunk-loader button {
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  margin-left: 6px;
-}
-
-.chunk-loader::before {
-  content: '';
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--text-muted);
-  border-radius: 50%;
-  margin-right: 8px;
-  vertical-align: middle;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
 .back-link {
   background: var(--toggle-bg);
   border-radius: 50%;
@@ -442,3 +382,46 @@ body::-webkit-scrollbar {
 
 /* Pagination explicitly preserves scroll position; avoid a second browser anchor adjustment. */
 .messages-inner { overflow-anchor:none; }
+
+/* One date picker for desktop, mobile, and an unzipped offline archive. */
+.date-shortcuts { display:grid; justify-items:end; gap:4px; margin-top:20px; }
+.jump-trigger, .jump-latest-link, .timeline-edge, .date-navigation button, .date-navigation select { font:inherit; color:var(--text); min-height:44px; border:1px solid var(--border); border-radius:8px; background:var(--card-bg); padding:10px 14px; cursor:pointer; touch-action:manipulation; }
+.jump-trigger { font-size:13px; white-space:nowrap; }
+.jump-trigger:active, .timeline-edge:active, .date-navigation button:active:not(:disabled) { transform:scale(.98); }
+.jump-latest-link { border:0; background:none; color:var(--text-muted); font-size:12px; }
+.timeline-edge { display:block; width:100%; margin:12px 0; font-size:13px; color:var(--text-muted); }
+[hidden] { display:none !important; }
+.timeline-status { font-size:12px; color:var(--text-muted); margin:12px 0; }
+.timeline-status:empty { display:none; }
+.date-navigation { position:fixed; inset:0; margin:auto; width:min(400px,calc(100% - 32px)); max-height:calc(100dvh - 32px); overflow:auto; padding:24px; border:1px solid var(--border); border-radius:16px; color:var(--text); background:var(--card-bg); box-shadow:0 16px 64px #0003; overscroll-behavior:contain; }
+.date-navigation::backdrop { background:rgba(0,0,0,.45); }
+.jump-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:18px; }
+.jump-heading h2 { font-size:18px; font-weight:600; letter-spacing:-.02em; }
+.jump-heading button { font-size:13px; background:transparent; }
+.date-navigation label { display:block; color:var(--text-muted); font-size:12px; margin-bottom:6px; }
+.date-navigation select { width:100%; font-size:16px; margin-bottom:18px; }
+.jump-months { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.jump-months button { padding:10px 8px; font-size:14px; font-variant-numeric:tabular-nums; }
+.jump-months button[aria-current="date"] { border-color:#6d9666; background:var(--toggle-bg); font-weight:600; }
+.date-navigation button:disabled { opacity:.35; cursor:default; }
+.jump-status { font-size:13px; color:var(--text-muted); margin:16px 0 0; }
+.jump-status:empty { display:none; }
+.date-navigation .jump-latest { width:100%; margin-top:18px; background:var(--toggle-bg); }
+#jump-retry { margin-top:12px; }
+.jump-trigger:focus-visible, .jump-latest-link:focus-visible, .timeline-edge:focus-visible, .date-navigation button:focus-visible, .date-navigation select:focus-visible { outline:3px solid #6d9666; outline-offset:2px; }
+.timeline-day .date-separator:focus { outline:none; }
+@media (max-width:1100px) {
+  .mobile-archive { gap:8px; padding:6px 16px; min-height:57px; }
+  .mobile-archive > span { margin-right:auto; font-weight:600; }
+  .mobile-archive > details > summary { display:flex; align-items:center; min-height:44px; font-size:12px; }
+  .date-separator { top:57px; }
+}
+@media (max-width:360px) {
+  .mobile-archive { padding:6px 10px; }
+  .mobile-archive > span { font-size:12px; }
+  .mobile-archive .jump-trigger { padding:8px 10px; font-size:12px; }
+  .date-navigation { padding:20px; }
+}
+@media (hover:hover) and (pointer:fine) {
+  .jump-trigger:hover, .timeline-edge:hover, .date-navigation button:hover:not(:disabled) { background:var(--toggle-bg); }
+}

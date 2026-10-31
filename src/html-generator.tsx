@@ -3,9 +3,9 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { MessageWithId, ChunkManifest } from './types.js';
 import { writeAtomic } from './storage.js';
-import { DISPLAY_TIME_ZONE } from './settings.js';
 import ts from 'typescript';
 import { renderReaderDay } from './reader-runtime.js';
+import { timelineMonths } from './timeline-runtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAT_CSS = fs.readFileSync(path.join(__dirname, 'styles/chat.css'), 'utf-8');
@@ -35,261 +35,11 @@ const compiledRuntime = ts.transpileModule(runtimeSource, { compilerOptions: {
 } }).outputText.replace(/^export /gm, '');
 const READER_SCRIPT = `(function(){${compiledRuntime}\nwindow.__renderReaderDay = renderReaderDay; document.addEventListener('DOMContentLoaded', installReaderGallery);})();`;
 
-// This script handles lazy loading of older message chunks
-const LOADER_SCRIPT = `
-(function() {
-  // Robust scroll-to-bottom using ResizeObserver
-  // Keeps user at bottom as lazy images load and expand the page
-  var wasAtBottom = true;
-  var supportsResizeObserver = typeof ResizeObserver !== 'undefined';
-  var resizeObserver = null;
-  var positionedLatestDay = false;
-
-  function scrollToBottom() {
-    if (document.querySelector && document.querySelector('dialog[open]')) return;
-    if (window.__CHUNK_MANIFEST__ && window.__CHUNK_MANIFEST__.startAtLatestDay && document.querySelectorAll) {
-      if (positionedLatestDay) return;
-      var dates = document.querySelectorAll('.messages-inner > .date-separator');
-      var latest = dates[dates.length - 1];
-      if (latest) {
-        var header = document.querySelector('.mobile-archive');
-        var offset = header ? header.getBoundingClientRect().height : 0;
-        window.scrollTo(0, window.scrollY + latest.getBoundingClientRect().top - offset);
-        positionedLatestDay = true; return;
-      }
-    }
-    window.scrollTo(0, document.documentElement.scrollHeight);
-  }
-
-  // Re-scroll whenever layout changes (images loading, etc.)
-  if (supportsResizeObserver) {
-    resizeObserver = new ResizeObserver(function() {
-      if (wasAtBottom) {
-        scrollToBottom();
-      }
-    });
-    resizeObserver.observe(document.body);
-  }
-
-  // Track if user scrolls away from bottom (throttled to ~10x/sec)
-  var scrollTicking = false;
-  window.addEventListener('scroll', function() {
-    if (!scrollTicking) {
-      scrollTicking = true;
-      requestAnimationFrame(function() {
-        var distanceToBottom = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
-        wasAtBottom = distanceToBottom < 50;
-        scrollTicking = false;
-      });
-    }
-  });
-
-  // Initial scroll
-  scrollToBottom();
-  window.addEventListener('load', function() {
-    scrollToBottom();
-    wasAtBottom = true;
-  });
-
-  // Stop observing after page stabilizes (30 seconds, or when not loading and not at bottom)
-  var observerStartTime = Date.now();
-  function checkDisconnect() {
-    var elapsed = Date.now() - observerStartTime;
-    // Disconnect after 30s, or after 10s if user has scrolled away from bottom
-    if (elapsed > 30000 || (elapsed > 10000 && !wasAtBottom)) {
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      }
-    } else {
-      setTimeout(checkDisconnect, 2000);
-    }
-  }
-  setTimeout(checkDisconnect, 5000);
-
-  var manifest = window.__CHUNK_MANIFEST__;
-  if (!manifest || !manifest.chunks || manifest.chunks.length <= 1) return;
-
-  var sentinel = document.getElementById('load-sentinel');
-  var loader = document.getElementById('chunk-loader');
-  if (!sentinel || !loader) return;
-
-  // Track which chunks are loaded (newest-first in manifest)
-  // The first chunk (index 0, newest) is already inline
-  var nextChunkIndex = 1;
-  var isLoading = false;
-  var loadFailed = false;
-  var loadingScript = null;
-  var loadTimeout = null;
-  var loaderShownAt = 0;
-  var loaderHideTimeout = null;
-  var MIN_LOADER_TIME = 800;
-
-  function showLoader() {
-    if (loaderHideTimeout) {
-      clearTimeout(loaderHideTimeout);
-      loaderHideTimeout = null;
-    }
-    loader.classList.remove('error');
-    loader.textContent = 'Loading messages...';
-    loader.classList.add('visible');
-    loaderShownAt = Date.now();
-  }
-
-  function hideLoader() {
-    var elapsed = Date.now() - loaderShownAt;
-    var remaining = MIN_LOADER_TIME - elapsed;
-    if (remaining > 0) {
-      loaderHideTimeout = setTimeout(function() {
-        loader.classList.remove('visible');
-      }, remaining);
-    } else {
-      loader.classList.remove('visible');
-    }
-  }
-
-  function clearRequest() {
-    if (loadTimeout) clearTimeout(loadTimeout);
-    loadTimeout = null;
-    if (loadingScript) loadingScript.remove();
-    loadingScript = null;
-  }
-
-  function retryChunk() {
-    loadFailed = false;
-    loadNextChunk();
-  }
-
-  function failChunk() {
-    isLoading = false;
-    loadFailed = true;
-    clearRequest();
-    if (loaderHideTimeout) clearTimeout(loaderHideTimeout);
-    loaderHideTimeout = null;
-    loader.classList.add('visible');
-    loader.classList.add('error');
-    loader.textContent = 'Could not load older messages. ';
-    var retry = document.createElement('button');
-    retry.type = 'button';
-    retry.textContent = 'Retry';
-    retry.onclick = retryChunk;
-    loader.appendChild(retry);
-  }
-
-  function sentinelVisible() {
-    if (document.querySelector && document.querySelector('dialog[open]')) return false;
-    var rect = sentinel.getBoundingClientRect();
-    return rect.top < 1000 && rect.bottom > 0;
-  }
-
-  // JSONP callback - receives loaded chunk data
-  window.__loadChunk = function(dateKey, messages) {
-    var expected = manifest.chunks[nextChunkIndex];
-    if (!isLoading || !expected || dateKey !== expected.date) return;
-    if (!Array.isArray(messages) || messages.length !== expected.messageCount || messages.length === 0) {
-      failChunk();
-      return;
-    }
-
-    var html;
-    try { html = window.__renderReaderDay(messages, manifest); }
-    catch (error) { failChunk(); return; }
-
-    // Preserve scroll position while prepending
-    var prevScrollHeight = document.body.scrollHeight;
-    var prevScrollTop = window.scrollY;
-
-    // Create a fragment and prepend (after sentinel and loader)
-    var temp = document.createElement('div');
-    temp.innerHTML = html;
-
-    // Insert after the loader element
-    while (temp.lastChild) {
-      loader.insertAdjacentElement('afterend', temp.lastChild);
-    }
-
-    // Restore scroll position
-    var newScrollHeight = document.body.scrollHeight;
-    window.scrollTo(0, prevScrollTop + (newScrollHeight - prevScrollHeight));
-
-    isLoading = false;
-    clearRequest();
-    hideLoader();
-    nextChunkIndex++;
-
-    // Check if we should load more (sentinel might still be visible after scroll adjustment)
-    setTimeout(function() {
-      // Only load if sentinel is actually visible (not scrolled far above viewport)
-      if (sentinelVisible()) {
-        loadNextChunk();
-      }
-    }, 100);
-  };
-
-  function loadNextChunk() {
-    if (isLoading || loadFailed || nextChunkIndex >= manifest.chunks.length) return;
-
-    isLoading = true;
-    showLoader();
-
-    var chunk = manifest.chunks[nextChunkIndex];
-    var script = document.createElement('script');
-    loadingScript = script;
-    script.src = (manifest.chunkBase || 'chunks/') + chunk.filename;
-    script.onerror = function() {
-      if (loadingScript !== script) return;
-      failChunk();
-      console.error('Failed to load chunk:', chunk.filename);
-    };
-    script.onload = function() {
-      // A fetched script that did not provide the expected JSONP data also failed.
-      if (loadingScript === script) failChunk();
-    };
-    loadTimeout = setTimeout(function() {
-      if (loadingScript === script) failChunk();
-    }, 15000);
-    document.head.appendChild(script);
-  }
-
-  window.addEventListener('online', function() {
-    if (loadFailed && sentinelVisible()) retryChunk();
-  });
-
-  // Use IntersectionObserver to detect when user scrolls near the top
-  if (typeof IntersectionObserver !== 'undefined') {
-    var observer = new IntersectionObserver(function(entries) {
-      if (entries[0].isIntersecting && !isLoading) {
-        loadNextChunk();
-      }
-    }, {
-      root: null,
-      rootMargin: '1000px 0px 0px 0px',
-      threshold: 0
-    });
-    observer.observe(sentinel);
-  }
-
-  // Scroll fallback in case IntersectionObserver doesn't fire
-  var loadTicking = false;
-  window.addEventListener('scroll', function() {
-    if (!loadTicking) {
-      loadTicking = true;
-      requestAnimationFrame(function() {
-        if (sentinelVisible()) {
-          loadNextChunk();
-        }
-        loadTicking = false;
-      });
-    }
-  });
-
-  // Initial check (handles short pages where sentinel is already visible)
-  setTimeout(function() {
-    if (sentinelVisible()) {
-      loadNextChunk();
-    }
-  }, 200);
-})();
-`;
+const timelineSource = fs.readFileSync(path.join(__dirname, 'timeline-runtime.ts'), 'utf8');
+const compiledTimeline = ts.transpileModule(timelineSource, { compilerOptions: {
+  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+} }).outputText.replace(/^export /gm, '');
+const LOADER_SCRIPT = `(function(){${compiledTimeline}\ninstallTimeline();})();`;
 
 export interface ViewerOptions { mode: 'reading' | 'records' | 'activity' | 'unresolved'; rawCount: number; revision?: string }
 
@@ -311,6 +61,8 @@ function ChatViewer({
   options?: ViewerOptions;
 }) {
   const filteredMessages = messages;
+  const years = [...new Set(timelineMonths(manifest).map(month => month.slice(0, 4)))];
+  const hasDates = manifest.chunks.length > 0;
 
   // Embed manifest for the loader script
   // Escape < to prevent </script> injection via malicious filenames
@@ -342,6 +94,7 @@ function ChatViewer({
         {showBackLink && <a class="back-link back-link-fixed" href="../index.html">←</a>}
         <header class="mobile-archive">
           <span>{groupName}</span>
+          {hasDates && <button type="button" class="jump-trigger" data-jump-date>Jump to date</button>}
           <details><summary>Archive details</summary><nav aria-label="Mobile archive views">
             <a href="index.html">Reading view</a>
             <a href="activity.html">Group activity</a>
@@ -354,10 +107,13 @@ function ChatViewer({
           {/* Center column: messages */}
           <div class="messages-container">
             <div class="messages-inner">
-              <div id="load-sentinel"></div>
-              <div id="chunk-loader" class="chunk-loader">Loading messages...</div>
+              <button type="button" class="timeline-edge" id="timeline-older" hidden={manifest.chunks.length < 2}>Older posts</button>
+              <div id="timeline-days">
               {filteredMessages.length === 0 && <p class="archive-empty">{options?.mode === 'unresolved' ? 'All media references have been resolved.' : 'No entries in this view.'}</p>}
-              {renderReaderDay(filteredMessages, viewerManifest, true)}
+              {hasDates && <section class="timeline-day" data-date={manifest.chunks[0]!.date}>{renderReaderDay(filteredMessages, viewerManifest, true)}</section>}
+              </div>
+              <button type="button" class="timeline-edge" id="timeline-newer" hidden>Newer posts</button>
+              <p id="timeline-status" class="timeline-status" role="status" aria-live="polite"></p>
             </div>
           </div>
 
@@ -373,6 +129,7 @@ function ChatViewer({
                 Updates on the growth and adventures of baby Clement.
               </div>
             </div>
+            {hasDates && <div class="date-shortcuts"><button type="button" class="jump-trigger" data-jump-date>Jump to date</button><button type="button" class="jump-latest-link" data-jump-latest>Latest update ↑</button></div>}
             <nav class="archive-navigation" aria-label="Archive views">
               <a href="index.html" aria-current={options?.mode === 'reading' ? 'page' : undefined}>Reading view</a>
               <details><summary>Archive details</summary>
@@ -387,6 +144,15 @@ function ChatViewer({
             </div>
           </div>
         </div>
+        {hasDates && <dialog id="date-navigation" class="date-navigation" aria-labelledby="jump-title">
+          <div class="jump-heading"><h2 id="jump-title">Jump to a month</h2><button type="button" id="jump-close">Close</button></div>
+          <label for="jump-year">Year</label>
+          <select id="jump-year">{years.map(year => <option value={year}>{year}</option>)}</select>
+          <div id="jump-months" class="jump-months" aria-label="Months"></div>
+          <p id="jump-status" class="jump-status" role="status" aria-live="polite"></p>
+          <button type="button" id="jump-retry" hidden>Retry</button>
+          <button type="button" id="jump-latest" class="jump-latest">Latest update ↑</button>
+        </dialog>}
         <script>{LOADER_SCRIPT}</script>
       </body>
     </html>

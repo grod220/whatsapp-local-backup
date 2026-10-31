@@ -1,4 +1,3 @@
-import { renderReaderDay } from '../src/reader-runtime.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -6,7 +5,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import vm from 'node:vm';
 import AdmZip from 'adm-zip';
 import { captureSnapshot, restoreSnapshot, verifyContinuity, sourcesDirectory, latestSnapshotHash, readSnapshot, objectPath } from '../src/archive.js';
 import { discoverWhatsAppZips } from '../src/discovery.js';
@@ -524,63 +522,5 @@ for (const location of ['sources', 'legacy', 'both']) {
     assert.throws(() => createOutputZip(f.output, backup, f.archive), /Damaged original export/);
     assert.equal(fs.existsSync(backup), false);
     assert.equal(f.read().messages.length, 1);
-  });
-}
-
-for (const failure of ['network', 'empty response', 'missing callback', 'timeout']) {
-  test(`viewer retries the same day after ${failure} and advances only after success`, t => {
-    const f = fixture(t);
-    f.run(f.zip('WhatsApp Chat - Family.zip', [line(20, 1, 'Oldest'), line(21, 1, 'Older'), line(22, 1, 'Newest')].join('\n')));
-    renderOutput(f.output);
-    const html = fs.readFileSync(path.join(f.output, 'family/index.html'), 'utf8');
-    const loaderScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!)
-      .find(script => script.includes('var nextChunkIndex = 1;'))!;
-    const scripts: any[] = [];
-    const timeouts: Array<{ callback: () => void; ms: number }> = [];
-    const listeners: Record<string, Array<() => void>> = {};
-    const classes = new Set<string>();
-    const element = () => ({ textContent: '', innerHTML: '', children: [] as any[],
-      classList: { add: (name: string) => classes.add(name), remove: (name: string) => classes.delete(name) },
-      appendChild(child: any) { this.children.push(child); }, remove() {}, insertAdjacentElement() {} });
-    const loader = element();
-    const sentinel = { getBoundingClientRect: () => ({ top: 0, bottom: 1 }) };
-    const window = {
-      innerHeight: 800, scrollY: 0, scrollTo() {}, __renderReaderDay: renderReaderDay,
-      addEventListener(event: string, callback: () => void) { (listeners[event] ??= []).push(callback); },
-      __CHUNK_MANIFEST__: JSON.parse(fs.readFileSync(path.join(f.output, 'family/chunks/manifest.json'), 'utf8')),
-    };
-    vm.runInNewContext(loaderScript, {
-      window, Date, console: { error() {} },
-      document: {
-        body: { scrollHeight: 1000 }, documentElement: { scrollHeight: 1000 },
-        getElementById: (id: string) => id === 'load-sentinel' ? sentinel : loader,
-        createElement: element, head: { appendChild: (script: any) => scripts.push(script) },
-      },
-      setTimeout(callback: () => void, ms: number) {
-        timeouts.push({ callback, ms });
-        if (ms === 200) callback();
-        return timeouts.length;
-      },
-      clearTimeout() {}, requestAnimationFrame(callback: () => void) { callback(); },
-    });
-    assert.equal(scripts[0].src, 'chunks/2026-01-21.js');
-    if (failure === 'network') scripts[0].onerror();
-    else if (failure === 'empty response') (window as any).__loadChunk('2026-01-21', []);
-    else if (failure === 'missing callback') scripts[0].onload();
-    else timeouts.find(timer => timer.ms === 15000)!.callback();
-    assert.match(loader.textContent, /could not load/i);
-    assert.ok(classes.has('visible'), 'the failure stays visible');
-    for (const listener of listeners.scroll!) listener();
-    assert.equal(scripts.length, 1, 'scrolling does not cause an endless retry loop or skip to the next day');
-    const retry = loader.children.at(-1)!;
-    assert.equal(retry.textContent, 'Retry');
-    if (failure === 'timeout') listeners.online![0]!();
-    else retry.onclick();
-    assert.equal(scripts[1].src, scripts[0].src);
-    vm.runInNewContext(fs.readFileSync(path.join(f.output, 'family/chunks/2026-01-21.js'), 'utf8'), { window });
-    scripts[1].onload();
-    assert.ok(!classes.has('error'));
-    for (const listener of listeners.scroll!) listener();
-    assert.equal(scripts[2].src, 'chunks/2026-01-20.js');
   });
 }
